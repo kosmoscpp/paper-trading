@@ -2,9 +2,10 @@ import streamlit as st
 import yfinance as yf
 import sqlite3
 import pandas as pd
+import time
 
 # --- APP CONFIG & DARK THEME ---
-st.set_page_config(page_title="NSE Paper Trader", page_icon="📈", layout="centered")
+st.set_page_config(page_title="NSE Live Trader", page_icon="⚡", layout="centered")
 
 st.markdown("""
     <style>
@@ -12,7 +13,7 @@ st.markdown("""
         .stApp { background-color: #111111; color: #e3e3e3; font-family: 'Segoe UI', sans-serif; }
         .main-title { text-align: center; font-size: 2.2rem; font-weight: 600; background: linear-gradient(45deg, #00b0ff, #00e676); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.2rem; }
         .main-subtitle { text-align: center; font-size: 0.9rem; color: #80868b; margin-bottom: 1.5rem; }
-        .metric-card { background-color: #1e1f20; padding: 15px; border-radius: 14px; border: 1px solid #303134; text-align: center; }
+        .metric-card { background-color: #1e1f20; padding: 15px; border-radius: 14px; border: 1px solid #303134; text-align: center; margin-bottom: 15px; }
         .login-box { background-color: #1e1f20; padding: 25px; border-radius: 14px; border: 1px solid #303134; margin-bottom: 20px; }
         div[data-baseweb="input"] input { background-color: #1a1a1a !important; color: #e3e3e3 !important; border-radius: 8px !important; }
     </style>
@@ -34,8 +35,12 @@ def init_db():
 init_db()
 
 # --- HEADER INTERFACE ---
-st.markdown('<div class="main-title">NSE Virtual Trader</div>', unsafe_allow_html=True)
-st.markdown('<div class="main-subtitle">Real-time Indian Stock Simulation Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">NSE Live Terminal</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-subtitle">Real-Time Indian Stock Simulation & Execution Room</div>', unsafe_allow_html=True)
+
+# --- AUTO REFRESH LOOP TRIGGER (Runs every 5 seconds for live movement) ---
+if "run_count" not in st.session_state:
+    st.session_state.run_count = 0
 
 # --- MAIN SCREEN LOGIN CONTAINER ---
 st.markdown('<div class="login-box">', unsafe_allow_html=True)
@@ -65,7 +70,6 @@ if user_record:
         conn.close()
         st.stop()
 else:
-    # Auto-registration logic
     current_balance = 100000.0  # Starting balance: ₹1 Lakh
     c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (user_input, pin_input, current_balance))
     conn.commit()
@@ -73,10 +77,11 @@ else:
 
 conn.close()
 
-st.markdown(f"#### 👤 Operator: {user_input.upper()}")
+# Show ticker details neatly
+st.markdown(f"👤 **Operator:** {user_input.upper()} | 💰 **Wallet:** ₹{current_balance:,.2f}")
 
-# --- APP INTERFACE NAVIGATION TABS ---
-tab1, tab2, tab3 = st.tabs(["📈 Market Watch", "💼 Portfolio Summary", "🛒 Execution Desk"])
+# --- MERGED NAVIGATION TABS ---
+tab1, tab2 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary"])
 
 STOCK_DICT = {
     "Reliance Industries": "RELIANCE.NS",
@@ -87,38 +92,99 @@ STOCK_DICT = {
     "State Bank of India (SBI)": "SBIN.NS"
 }
 
-# --- TAB 1: MARKET WATCH ---
+# --- TAB 1: MERGED LIVE TRADE ROOM & EXECUTION ---
 with tab1:
-    st.markdown("### Live Market Feed")
-    selected_stock_label = st.selectbox("Select Asset Class:", list(STOCK_DICT.keys()))
+    selected_stock_label = st.selectbox("Select Target Instrument:", list(STOCK_DICT.keys()))
     ticker_symbol = STOCK_DICT[selected_stock_label]
     
-    with st.spinner("Fetching live execution price data & charts..."):
-        try:
-            stock_data = yf.Ticker(ticker_symbol)
+    # Fetch today's data with tight 1-minute tracking intervals
+    try:
+        stock_data = yf.Ticker(ticker_symbol)
+        # Fetching today's data at 1-minute intervals
+        live_history = stock_data.history(period="1d", interval="1m")
+        
+        if live_history.empty:
+            # Fallback if the Indian market is closed right now (shows last active day's 1m interval)
+            live_history = stock_data.history(period="5d", interval="1m").tail(60)
             
-            # Fetch 1 month of history for the chart
-            history_30d = stock_data.history(period="1mo")
-            live_price = history_30d["Close"].iloc[-1]
+        live_price = live_history["Close"].iloc[-1]
+        
+        # Display Dynamic Metric Card
+        st.markdown(
+            f"<div class='metric-card'><h4>{selected_stock_label}</h4>"
+            f"<h1 style='color:#00e676;'>₹{live_price:,.2f}</h1>"
+            f"<p style='color:#80868b; font-size:0.8rem;'>Live Auto-Polling Active (5s) | Exch: NSE</p></div>", 
+            unsafe_allow_html=True
+        )
+        
+        # Stream the chart
+        st.markdown("#### 📊 Intraday Tick Chart (1m Bars)")
+        st.line_chart(live_history[['Close']])
+        
+    except Exception as e:
+        st.error("Market feed offline. Waiting for next tick stream...")
+        live_price = 0.0
+
+    st.markdown("---")
+    st.markdown("### ⚡ Execution Window")
+    
+    trade_qty = st.number_input("Shares Quantity", min_value=1, step=1, value=5, key="order_qty")
+    order_value = trade_qty * live_price
+    st.write(f"Estimated Order Value: **₹{order_value:,.2f}**")
+    
+    btn_buy, btn_sell = st.columns(2)
+    
+    with btn_buy:
+        if st.button("EXECUTE MARKET BUY 🟢", use_container_width=True):
+            if order_value > current_balance:
+                st.error("Insufficient margin capability.")
+            elif live_price == 0:
+                st.error("Invalid execution parameters.")
+            else:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                new_balance = current_balance - order_value
+                c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_balance, user_input))
+                c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, ticker_symbol))
+                existing_asset = c.fetchone()
+                
+                if existing_asset:
+                    ex_qty, ex_avg = existing_asset
+                    new_qty = ex_qty + trade_qty
+                    new_avg = ((ex_qty * ex_avg) + order_value) / new_qty
+                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ? WHERE username = ? AND ticker = ?", (new_qty, new_avg, user_input, ticker_symbol))
+                else:
+                    c.execute("INSERT INTO portfolio (username, ticker, quantity, avg_price) VALUES (?, ?, ?, ?)", (user_input, ticker_symbol, trade_qty, live_price))
+                conn.commit()
+                conn.close()
+                st.success(f"Bought {trade_qty} units of {selected_stock_label}!")
+                time.sleep(1)
+                st.rerun()
+                
+    with btn_sell:
+        if st.button("EXECUTE MARKET SELL 🔴", use_container_width=True):
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, ticker_symbol))
+            existing_asset = c.fetchone()
             
-            # Metric Card Display
-            st.markdown(
-                f"<div class='metric-card'><h4>{selected_stock_label}</h4>"
-                f"<h1 style='color:#00e676;'>₹{live_price:,.2f}</h1>"
-                f"<p style='color:#80868b; font-size:0.8rem;'>Ticker ID: {ticker_symbol} | Exchange: NSE India</p></div>", 
-                unsafe_allow_html=True
-            )
-            
-            # --- THE TRADING CHART GRID ---
-            st.markdown("#### 📊 30-Day Trend Matrix")
-            # We filter just the Closing prices for a clean trend line
-            chart_data = history_30d[['Close']]
-            st.line_chart(chart_data)
-            
-        except Exception as e:
-            st.error("Failed to stream asset metrics. Verify execution connection context.")
-            live_price = 0.0
-            
+            if not existing_asset or existing_asset[0] < trade_qty:
+                st.error("Insufficient inventory available to sell.")
+                conn.close()
+            else:
+                ex_qty, ex_avg = existing_asset
+                new_qty = ex_qty - trade_qty
+                gain_capital = trade_qty * live_price
+                new_balance = current_balance + gain_capital
+                
+                c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_balance, user_input))
+                c.execute("UPDATE portfolio SET quantity = ? WHERE username = ? AND ticker = ?", (new_qty, user_input, ticker_symbol))
+                conn.commit()
+                conn.close()
+                st.success(f"Liquidated {trade_qty} units of {selected_stock_label}!")
+                time.sleep(1)
+                st.rerun()
+
 # --- TAB 2: PORTFOLIO SUMMARY ---
 with tab2:
     st.markdown("### Asset Allocation Matrix")
@@ -169,58 +235,10 @@ with tab2:
     if len(portfolio_rows) > 0:
         st.table(pd.DataFrame(portfolio_rows))
     else:
-        st.caption("No open investment profiles detected. Navigate to the Execution Desk tab to allocate assets.")
+        st.caption("No open investment profiles detected.")
 
-# --- TAB 3: EXECUTION DESK ---
-with tab3:
-    st.markdown("### Order Allocation Window")
-    st.info(f"Available Allocation Capital: **₹{current_balance:,.2f}**")
-    
-    trade_stock_label = st.selectbox("Select Target Instrument:", list(STOCK_DICT.keys()), key="trade_stock")
-    trade_ticker = STOCK_DICT[trade_stock_label]
-    
-    trade_qty = st.number_input("Shares Quantity", min_value=1, step=1, value=5)
-    
-    try:
-        execution_price = yf.Ticker(trade_ticker).history(period="1d")["Close"].iloc[-1]
-    except:
-        execution_price = 0.0
-        
-    order_value = trade_qty * execution_price
-    st.write(f"Estimated Order Value: **₹{order_value:,.2f}** (@ ₹{execution_price:,.2f} per unit)")
-    
-    btn_buy, btn_sell = st.columns(2)
-    
-    with btn_buy:
-        if st.button("EXECUTE MARKET BUY 🟢", use_container_width=True):
-            if order_value > current_balance:
-                st.error("Insufficient margin capability to process order.")
-            elif execution_price == 0:
-                st.error("Invalid execution parameters.")
-            else:
-                conn = sqlite3.connect(DB_FILE)
-                c = conn.cursor()
-                
-                new_balance = current_balance - order_value
-                c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_balance, user_input))
-                c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, trade_ticker))
-                existing_asset = c.fetchone()
-                
-                if existing_asset:
-                    ex_qty, ex_avg = existing_asset
-                    new_qty = ex_qty + trade_qty
-                    new_avg = ((ex_qty * ex_avg) + order_value) / new_qty
-                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ? WHERE username = ? AND ticker = ?", (new_qty, new_avg, user_input, trade_ticker))
-                else:
-                    c.execute("INSERT INTO portfolio (username, ticker, quantity, avg_price) VALUES (?, ?, ?, ?)", (user_input, trade_ticker, trade_qty, execution_price))
-                    
-                conn.commit()
-                conn.close()
-                st.success(f"Market filled: Bought {trade_qty} units of {trade_stock_label}!")
-                st.rerun()
-                
-    with btn_sell:
-        if st.button("EXECUTE MARKET SELL 🔴", use_container_width=True):
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, trade_ticker))
+# --- THE LIVE ENGINE STIMULATOR ---
+# This forces the page to reload every 5 seconds to query fresh market changes!
+time.sleep(5)
+st.session_state.run_count += 1
+st.rerun()
