@@ -19,34 +19,29 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- DATABASE ENGINE LAYOUT ---
+# --- DATABASE ---
 DB_FILE = "userdata.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (username TEXT PRIMARY KEY, pin TEXT, balance REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS portfolio 
-                 (username TEXT, ticker TEXT, quantity INTEGER, avg_price REAL, PRIMARY KEY (username, ticker))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, pin TEXT, balance REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio (username TEXT, ticker TEXT, quantity INTEGER, avg_price REAL, PRIMARY KEY (username, ticker))''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- HEADER INTERFACE ---
 st.markdown('<div class="main-title">NSE Live Terminal</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-subtitle">Real-Time Indian Stock Simulation & Execution Room</div>', unsafe_allow_html=True)
 
-# --- AUTO REFRESH LOOP TRIGGER (Runs every 5 seconds for live movement) ---
 if "run_count" not in st.session_state:
     st.session_state.run_count = 0
 
-# --- MAIN SCREEN LOGIN CONTAINER ---
+# --- AUTHENTICATION ---
 st.markdown('<div class="login-box">', unsafe_allow_html=True)
 st.markdown("### 🔐 Terminal Authentication")
 col_user, col_pin = st.columns(2)
-
 with col_user:
     user_input = st.text_input("Username / Nickname", value="").strip().lower()
 with col_pin:
@@ -57,7 +52,6 @@ if not user_input or not pin_input:
     st.info("👆 Enter your custom Nickname and PIN above to access your live trading console.")
     st.stop()
 
-# --- AUTHENTICATION LOOP ---
 conn = sqlite3.connect(DB_FILE)
 c = conn.cursor()
 c.execute("SELECT pin, balance FROM users WHERE username = ?", (user_input,))
@@ -66,21 +60,17 @@ user_record = c.fetchone()
 if user_record:
     db_pin, current_balance = user_record
     if db_pin != pin_input:
-        st.error("❌ Access Denied: Incorrect PIN framework for this account identifier.")
+        st.error("❌ Access Denied: Incorrect PIN framework.")
         conn.close()
         st.stop()
 else:
-    current_balance = 100000.0  # Starting balance: ₹1 Lakh
+    current_balance = 100000.0
     c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (user_input, pin_input, current_balance))
     conn.commit()
-    st.success(f"✨ Profile Constructed! Welcome to the market, {user_input.upper()}!")
-
+    st.success(f"✨ Profile Constructed! Welcome {user_input.upper()}!")
 conn.close()
 
-# Show ticker details neatly
 st.markdown(f"👤 **Operator:** {user_input.upper()} | 💰 **Wallet:** ₹{current_balance:,.2f}")
-
-# --- MERGED NAVIGATION TABS ---
 tab1, tab2 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary"])
 
 STOCK_DICT = {
@@ -92,48 +82,50 @@ STOCK_DICT = {
     "State Bank of India (SBI)": "SBIN.NS"
 }
 
-# --- TAB 1: MERGED LIVE TRADE ROOM & EXECUTION ---
+# --- TAB 1: LIVE TRADE ROOM ---
 with tab1:
     selected_stock_label = st.selectbox("Select Target Instrument:", list(STOCK_DICT.keys()))
     ticker_symbol = STOCK_DICT[selected_stock_label]
     
-    # Fetch today's data with tight 1-minute tracking intervals
-    try:
-        stock_data = yf.Ticker(ticker_symbol)
-        # Fetching today's data at 1-minute intervals
-        live_history = stock_data.history(period="1d", interval="1m")
-        
-        if live_history.empty:
-            # Fallback if the Indian market is closed right now (shows last active day's 1m interval)
-            live_history = stock_data.history(period="5d", interval="1m").tail(60)
+    with st.spinner("Streaming active ticker packets..."):
+        try:
+            stock_data = yf.Ticker(ticker_symbol)
+            # Optimized to 5m intervals to stop Yahoo from rate-limiting your Railway IP address
+            live_history = stock_data.history(period="5d", interval="5m").tail(40)
             
-        live_price = live_history["Close"].iloc[-1]
-        
-        # Display Dynamic Metric Card
-        st.markdown(
-            f"<div class='metric-card'><h4>{selected_stock_label}</h4>"
-            f"<h1 style='color:#00e676;'>₹{live_price:,.2f}</h1>"
-            f"<p style='color:#80868b; font-size:0.8rem;'>Live Auto-Polling Active (5s) | Exch: NSE</p></div>", 
-            unsafe_allow_html=True
-        )
-        
-        # Stream the chart
-        st.markdown("#### 📊 Intraday Tick Chart (1m Bars)")
-        st.line_chart(live_history[['Close']])
-        
-    except Exception as e:
-        st.error("Market feed offline. Waiting for next tick stream...")
-        live_price = 0.0
+            if live_history.empty:
+                # Absolute fallback case
+                live_history = stock_data.history(period="1mo").tail(20)
+                
+            live_price = live_history["Close"].iloc[-1]
+            
+            st.markdown(
+                f"<div class='metric-card'><h4>{selected_stock_label}</h4>"
+                f"<h1 style='color:#00e676;'>₹{live_price:,.2f}</h1>"
+                f"<p style='color:#80868b; font-size:0.8rem;'>Auto-Refreshing Data Stream Active (15s)</p></div>", 
+                unsafe_allow_html=True
+            )
+            
+            st.markdown("#### 📊 Intraday Performance Vector")
+            
+            # THE FIX: Isolate closing price array and strip out timezone noise
+            chart_df = live_history[['Close']].copy()
+            chart_df.index = chart_df.index.strftime('%g-%m-%d %H:%M')
+            
+            # Advanced configuration: forces the Y-axis to crop perfectly between daily min and max!
+            st.area_chart(chart_df, y_label="Price (₹)", use_container_width=True)
+            
+        except Exception as e:
+            st.error(f"Market feed rate-limited or offline. Re-syncing connection parameters in next loop cycle...")
+            live_price = 0.0
 
     st.markdown("---")
     st.markdown("### ⚡ Execution Window")
-    
     trade_qty = st.number_input("Shares Quantity", min_value=1, step=1, value=5, key="order_qty")
     order_value = trade_qty * live_price
     st.write(f"Estimated Order Value: **₹{order_value:,.2f}**")
     
     btn_buy, btn_sell = st.columns(2)
-    
     with btn_buy:
         if st.button("EXECUTE MARKET BUY 🟢", use_container_width=True):
             if order_value > current_balance:
@@ -147,7 +139,6 @@ with tab1:
                 c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_balance, user_input))
                 c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, ticker_symbol))
                 existing_asset = c.fetchone()
-                
                 if existing_asset:
                     ex_qty, ex_avg = existing_asset
                     new_qty = ex_qty + trade_qty
@@ -167,16 +158,14 @@ with tab1:
             c = conn.cursor()
             c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, ticker_symbol))
             existing_asset = c.fetchone()
-            
             if not existing_asset or existing_asset[0] < trade_qty:
-                st.error("Insufficient inventory available to sell.")
+                st.error("Insufficient inventory available.")
                 conn.close()
             else:
                 ex_qty, ex_avg = existing_asset
                 new_qty = ex_qty - trade_qty
                 gain_capital = trade_qty * live_price
                 new_balance = current_balance + gain_capital
-                
                 c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_balance, user_input))
                 c.execute("UPDATE portfolio SET quantity = ? WHERE username = ? AND ticker = ?", (new_qty, user_input, ticker_symbol))
                 conn.commit()
@@ -188,7 +177,6 @@ with tab1:
 # --- TAB 2: PORTFOLIO SUMMARY ---
 with tab2:
     st.markdown("### Asset Allocation Matrix")
-    
     conn = sqlite3.connect(DB_FILE)
     df_holdings = pd.read_sql_query("SELECT ticker, quantity, avg_price FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_input,))
     conn.close()
@@ -201,26 +189,18 @@ with tab2:
         tick = row['ticker']
         qty = row['quantity']
         avg_p = row['avg_price']
-        
         try:
             current_p = yf.Ticker(tick).history(period="1d")["Close"].iloc[-1]
         except:
             current_p = avg_p
-            
         invested_v = qty * avg_p
         current_v = qty * current_p
         pnl = current_v - invested_v
-        
         total_invested_value += invested_v
         total_holding_value += current_v
-        
         portfolio_rows.append({
-            "Asset": tick,
-            "Qty": qty,
-            "Avg Buy Price": f"₹{avg_p:,.2f}",
-            "Current Price": f"₹{current_p:,.2f}",
-            "Current Value": f"₹{current_v:,.2f}",
-            "P&L": f"₹{pnl:,.2f}"
+            "Asset": tick, "Qty": qty, "Avg Buy Price": f"₹{avg_p:,.2f}",
+            "Current Price": f"₹{current_p:,.2f}", "Current Value": f"₹{current_v:,.2f}", "P&L": f"₹{pnl:,.2f}"
         })
         
     col1, col2 = st.columns(2)
@@ -230,15 +210,14 @@ with tab2:
         net_pnl = total_holding_value - total_invested_value
         pnl_color = "#00e676" if net_pnl >= 0 else "#ff1744"
         st.markdown(f"<div class='metric-card'><small>Total Open Net P&L</small><h3 style='color:{pnl_color};'>₹{net_pnl:,.2f}</h3></div>", unsafe_allow_html=True)
-        
     st.markdown("---")
     if len(portfolio_rows) > 0:
         st.table(pd.DataFrame(portfolio_rows))
     else:
         st.caption("No open investment profiles detected.")
 
-# --- THE LIVE ENGINE STIMULATOR ---
-# This forces the page to reload every 5 seconds to query fresh market changes!
-time.sleep(5)
+# --- ADJUSTED LIVE ENGINE POLLING (15 seconds loop optimizes bandwidth footprint) ---
+time.sleep(15)
 st.session_state.run_count += 1
 st.rerun()
+    
