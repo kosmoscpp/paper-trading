@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import time
 
 # --- APP CONFIG & CUSTOM CSS ---
-st.set_page_config(page_title="NSE Live Trader", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="NSE Live Terminal", page_icon="⚡", layout="centered")
 
 st.markdown("""
     <style>
@@ -33,8 +33,44 @@ def init_db():
 
 init_db()
 
+# --- THE 12-STOCK DIVERSIFIED MARKET MATRIX ---
+STOCK_DICT = {
+    "Reliance Industries": "RELIANCE.NS",
+    "Tata Consultancy Services (TCS)": "TCS.NS",
+    "Infosys Limited": "INFY.NS",
+    "HDFC Bank": "HDFCBANK.NS",
+    "ICICI Bank": "ICICIBANK.NS",
+    "State Bank of India (SBI)": "SBIN.NS",
+    "ITC Limited": "ITC.NS",
+    "Hindustan Unilever (HUL)": "HINDUNILVR.NS",
+    "Maruti Suzuki": "MARUTI.NS",
+    "Mahindra & Mahindra (M&M)": "M&M.NS",
+    "Adani Ports": "ADANIPORTS.NS",
+    "NTPC Limited": "NTPC.NS"
+}
+
 if "market_cache" not in st.session_state:
     st.session_state.market_cache = {}
+
+# --- GLOBAL BACKGROUND SYNC ENGINE ---
+# This updates every single stock in memory simultaneously to fix the Portfolio sync bug
+def global_market_sync():
+    for name, ticker in STOCK_DICT.items():
+        try:
+            stock_data = yf.Ticker(ticker)
+            history = stock_data.history(period="5d", interval="5m").tail(35)
+            if not history.empty:
+                st.session_state.market_cache[ticker] = {
+                    "price": history["Close"].iloc[-1],
+                    "history": history
+                }
+        except:
+            pass # Keep moving to the next stock if one request drops
+
+# Run an initial core sync if cache memory is empty
+if not st.session_state.market_cache:
+    with st.spinner("Initializing global market data feeds..."):
+        global_market_sync()
 
 # --- CLEAN HEADER ---
 st.markdown('<div class="main-title">NSE Live Terminal</div>', unsafe_allow_html=True)
@@ -44,7 +80,7 @@ st.markdown('<div class="main-subtitle">Real-Time Indian Stock Simulation & Exec
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user = ""
-    st.session_state.balance = 10000000.0  # UPGRADED STARTING BALANCE: ₹1 Crore
+    st.session_state.balance = 10000000.0  # Initial Balance: ₹1 Crore
 
 if not st.session_state.authenticated:
     st.markdown('<div class="login-box">', unsafe_allow_html=True)
@@ -71,7 +107,7 @@ if not st.session_state.authenticated:
             conn.close()
             st.stop()
     else:
-        current_balance = 10000000.0  # Assigned to new users: ₹1 Crore
+        current_balance = 10000000.0
         c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (user_input, pin_input, current_balance))
         conn.commit()
     conn.close()
@@ -89,41 +125,16 @@ st.markdown(f"👤 **Operator:** {user_input.upper()} | 💰 **Wallet Balance:**
 
 tab1, tab2 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary"])
 
-# Cleaned dictionary (Zomato & Tata Motors successfully removed)
-STOCK_DICT = {
-    "Reliance Industries": "RELIANCE.NS",
-    "Tata Consultancy Services (TCS)": "TCS.NS",
-    "HDFC Bank": "HDFCBANK.NS",
-    "State Bank of India (SBI)": "SBIN.NS"
-}
-
 # --- TAB 1: LIVE TRADE ROOM ---
 with tab1:
     selected_stock_label = st.selectbox("Select Target Instrument:", list(STOCK_DICT.keys()))
     ticker_symbol = STOCK_DICT[selected_stock_label]
     
-    live_price = 0.0
-    live_history = pd.DataFrame()
-    
-    try:
-        stock_data = yf.Ticker(ticker_symbol)
-        live_history = stock_data.history(period="5d", interval="5m").tail(35)
-        
-        if not live_history.empty:
-            live_price = live_history["Close"].iloc[-1]
-            st.session_state.market_cache[ticker_symbol] = {
-                "price": live_price,
-                "history": live_history
-            }
-    except Exception as e:
-        pass
-        
-    if (ticker_symbol in st.session_state.market_cache) and (live_price == 0.0 or live_history.empty):
+    # Instantly read from our globally synchronized background cache
+    if ticker_symbol in st.session_state.market_cache:
         live_price = st.session_state.market_cache[ticker_symbol]["price"]
         live_history = st.session_state.market_cache[ticker_symbol]["history"]
-        st.caption("⚠️ API limit hit. Streaming live from local database memory relay...")
-
-    if live_price > 0.0 and not live_history.empty:
+        
         st.markdown(
             f"<div class='metric-card'><h4>{selected_stock_label}</h4>"
             f"<h1 style='color:#00e676;'>₹{live_price:,.2f}</h1>"
@@ -153,7 +164,8 @@ with tab1:
         )
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
     else:
-        st.error("Connection link resetting. Re-routing ticker packet stream in next loop cycle...")
+        st.error("Streaming connection dropped. Resynchronizing baseline matrix...")
+        live_price = 0.0
 
     st.markdown("### ⚡ Execution Window")
     trade_qty = st.number_input("Shares Quantity", min_value=1, step=1, value=5, key="order_qty")
@@ -222,10 +234,15 @@ with tab2:
     total_invested_value = 0.0
     portfolio_rows = []
     
+    # Loop matches directly to our pre-cached values (instant sync!)
     for idx, row in df_holdings.iterrows():
         tick = row['ticker']
         qty = row['quantity']
         avg_p = row['avg_price']
+        
+        # Find human-readable label matching the ticker symbol
+        asset_label = next((k for k, v in STOCK_DICT.items() if v == tick), tick)
+        
         try:
             current_p = st.session_state.market_cache[tick]["price"] if tick in st.session_state.market_cache else avg_p
         except:
@@ -237,7 +254,7 @@ with tab2:
         total_invested_value += invested_v
         total_holding_value += current_v
         portfolio_rows.append({
-            "Asset": tick, "Qty": qty, "Avg Buy Price": f"₹{avg_p:,.2f}",
+            "Asset": asset_label, "Qty": qty, "Avg Buy Price": f"₹{avg_p:,.2f}",
             "Current Price": f"₹{current_p:,.2f}", "Current Value": f"₹{current_v:,.2f}", "P&L": f"₹{pnl:,.2f}"
         })
         
@@ -254,7 +271,8 @@ with tab2:
     else:
         st.caption("No open investment profiles detected.")
 
-# --- AUTO REFRESH LOOP (10s) ---
-time.sleep(10)
+# --- BACKGROUND REFRESH & BACKGROUND SYNC (15s Loop Optimization) ---
+time.sleep(15)
+global_market_sync()
 st.rerun()
-                                   
+            
