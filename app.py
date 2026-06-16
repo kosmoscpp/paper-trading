@@ -93,20 +93,32 @@ with tab1:
     selected_stock_label = st.selectbox("Select Asset Class:", list(STOCK_DICT.keys()))
     ticker_symbol = STOCK_DICT[selected_stock_label]
     
-    with st.spinner("Fetching live execution price data..."):
+    with st.spinner("Fetching live execution price data & charts..."):
         try:
             stock_data = yf.Ticker(ticker_symbol)
-            live_price = stock_data.history(period="1d")["Close"].iloc[-1]
+            
+            # Fetch 1 month of history for the chart
+            history_30d = stock_data.history(period="1mo")
+            live_price = history_30d["Close"].iloc[-1]
+            
+            # Metric Card Display
             st.markdown(
                 f"<div class='metric-card'><h4>{selected_stock_label}</h4>"
                 f"<h1 style='color:#00e676;'>₹{live_price:,.2f}</h1>"
                 f"<p style='color:#80868b; font-size:0.8rem;'>Ticker ID: {ticker_symbol} | Exchange: NSE India</p></div>", 
                 unsafe_allow_html=True
             )
+            
+            # --- THE TRADING CHART GRID ---
+            st.markdown("#### 📊 30-Day Trend Matrix")
+            # We filter just the Closing prices for a clean trend line
+            chart_data = history_30d[['Close']]
+            st.line_chart(chart_data)
+            
         except Exception as e:
             st.error("Failed to stream asset metrics. Verify execution connection context.")
             live_price = 0.0
-
+            
 # --- TAB 2: PORTFOLIO SUMMARY ---
 with tab2:
     st.markdown("### Asset Allocation Matrix")
