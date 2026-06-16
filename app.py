@@ -33,7 +33,6 @@ def init_db():
 
 init_db()
 
-# Initialize background cache for handling rate limits smoothly
 if "market_cache" not in st.session_state:
     st.session_state.market_cache = {}
 
@@ -42,11 +41,10 @@ st.markdown('<div class="main-title">NSE Live Terminal</div>', unsafe_allow_html
 st.markdown('<div class="main-subtitle">Real-Time Indian Stock Simulation & Execution Room</div>', unsafe_allow_html=True)
 
 # --- CONDITIONAL TERMINAL AUTHENTICATION ---
-# If the user has logged in successfully, this block completely vanishes from the screen
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user = ""
-    st.session_state.balance = 100000.0
+    st.session_state.balance = 10000000.0  # UPGRADED STARTING BALANCE: ₹1 Crore
 
 if not st.session_state.authenticated:
     st.markdown('<div class="login-box">', unsafe_allow_html=True)
@@ -61,7 +59,6 @@ if not st.session_state.authenticated:
     if not user_input or not pin_input:
         st.stop()
 
-    # Database credential verification loop
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT pin, balance FROM users WHERE username = ?", (user_input,))
@@ -74,12 +71,11 @@ if not st.session_state.authenticated:
             conn.close()
             st.stop()
     else:
-        current_balance = 100000.0
+        current_balance = 10000000.0  # Assigned to new users: ₹1 Crore
         c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (user_input, pin_input, current_balance))
         conn.commit()
     conn.close()
 
-    # Save authentication state data
     st.session_state.authenticated = True
     st.session_state.user = user_input
     st.session_state.balance = current_balance
@@ -89,17 +85,15 @@ if not st.session_state.authenticated:
 user_input = st.session_state.user
 current_balance = st.session_state.balance
 
-# Modern, clean inline placement for system operators
 st.markdown(f"👤 **Operator:** {user_input.upper()} | 💰 **Wallet Balance:** ₹{current_balance:,.2f}")
 
 tab1, tab2 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary"])
 
+# Cleaned dictionary (Zomato & Tata Motors successfully removed)
 STOCK_DICT = {
     "Reliance Industries": "RELIANCE.NS",
     "Tata Consultancy Services (TCS)": "TCS.NS",
     "HDFC Bank": "HDFCBANK.NS",
-    "Zomato Limited": "ZOMATO.NS",
-    "Tata Motors": "TATAMOTORS.NS",
     "State Bank of India (SBI)": "SBIN.NS"
 }
 
@@ -111,23 +105,19 @@ with tab1:
     live_price = 0.0
     live_history = pd.DataFrame()
     
-    # SRE Resiliency Logic: Hit the API, use cache fallback if rate limited
     try:
         stock_data = yf.Ticker(ticker_symbol)
-        # Pull 5 days of 5-minute segments for complete structural stability
         live_history = stock_data.history(period="5d", interval="5m").tail(35)
         
         if not live_history.empty:
             live_price = live_history["Close"].iloc[-1]
-            # Commit copy directly to memory cache
             st.session_state.market_cache[ticker_symbol] = {
                 "price": live_price,
                 "history": live_history
             }
     except Exception as e:
-        pass # Silently drop to cache check below to keep the user experience smooth
+        pass
         
-    # Read back from stable cache memory if the data payload is blank or throttled
     if (ticker_symbol in st.session_state.market_cache) and (live_price == 0.0 or live_history.empty):
         live_price = st.session_state.market_cache[ticker_symbol]["price"]
         live_history = st.session_state.market_cache[ticker_symbol]["history"]
@@ -141,8 +131,6 @@ with tab1:
             unsafe_allow_html=True
         )
         
-        # --- PLOTLY PROFESSIONAL HOLLOW LINE CHART ---
-        # Formats the timestamps beautifully without crowding the bottom axis
         chart_df = live_history[['Close']].copy()
         chart_df.index = chart_df.index.strftime('%H:%M')
         
@@ -155,7 +143,6 @@ with tab1:
             name='Price'
         ))
         
-        # Auto-crop setting: forces layout bounds tightly around the active values
         fig.update_layout(
             margin=dict(l=20, r=20, t=10, b=10),
             height=250,
@@ -239,8 +226,6 @@ with tab2:
         tick = row['ticker']
         qty = row['quantity']
         avg_p = row['avg_price']
-        
-        # Pull holding values from system cache or directly from server
         try:
             current_p = st.session_state.market_cache[tick]["price"] if tick in st.session_state.market_cache else avg_p
         except:
@@ -269,7 +254,7 @@ with tab2:
     else:
         st.caption("No open investment profiles detected.")
 
-# --- AUTO ENGINE RE-RUN EVENT (10 seconds optimization window) ---
+# --- AUTO REFRESH LOOP (10s) ---
 time.sleep(10)
 st.rerun()
-        
+                                   
