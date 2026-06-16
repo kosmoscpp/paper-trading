@@ -53,7 +53,6 @@ if "market_cache" not in st.session_state:
     st.session_state.market_cache = {}
 
 # --- GLOBAL BACKGROUND SYNC ENGINE ---
-# This updates every single stock in memory simultaneously to fix the Portfolio sync bug
 def global_market_sync():
     for name, ticker in STOCK_DICT.items():
         try:
@@ -65,9 +64,8 @@ def global_market_sync():
                     "history": history
                 }
         except:
-            pass # Keep moving to the next stock if one request drops
+            pass
 
-# Run an initial core sync if cache memory is empty
 if not st.session_state.market_cache:
     with st.spinner("Initializing global market data feeds..."):
         global_market_sync()
@@ -123,14 +121,14 @@ current_balance = st.session_state.balance
 
 st.markdown(f"👤 **Operator:** {user_input.upper()} | 💰 **Wallet Balance:** ₹{current_balance:,.2f}")
 
-tab1, tab2 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary"])
+# UNLOCKED THE THREE-TAB GRID
+tab1, tab2, tab3 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary", "🏆 Rankings Leaderboard"])
 
 # --- TAB 1: LIVE TRADE ROOM ---
 with tab1:
     selected_stock_label = st.selectbox("Select Target Instrument:", list(STOCK_DICT.keys()))
     ticker_symbol = STOCK_DICT[selected_stock_label]
     
-    # Instantly read from our globally synchronized background cache
     if ticker_symbol in st.session_state.market_cache:
         live_price = st.session_state.market_cache[ticker_symbol]["price"]
         live_history = st.session_state.market_cache[ticker_symbol]["history"]
@@ -147,18 +145,12 @@ with tab1:
         
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=chart_df.index, 
-            y=chart_df['Close'], 
-            mode='lines',
-            line=dict(color='#00b0ff', width=2.5),
-            name='Price'
+            x=chart_df.index, y=chart_df['Close'], mode='lines',
+            line=dict(color='#00b0ff', width=2.5), name='Price'
         ))
-        
         fig.update_layout(
-            margin=dict(l=20, r=20, t=10, b=10),
-            height=250,
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=20, r=20, t=10, b=10), height=250,
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
             xaxis=dict(showgrid=False, color='#80868b'),
             yaxis=dict(showgrid=True, gridcolor='#303134', color='#80868b', autorange=True),
         )
@@ -234,13 +226,11 @@ with tab2:
     total_invested_value = 0.0
     portfolio_rows = []
     
-    # Loop matches directly to our pre-cached values (instant sync!)
     for idx, row in df_holdings.iterrows():
         tick = row['ticker']
         qty = row['quantity']
         avg_p = row['avg_price']
         
-        # Find human-readable label matching the ticker symbol
         asset_label = next((k for k, v in STOCK_DICT.items() if v == tick), tick)
         
         try:
@@ -271,8 +261,63 @@ with tab2:
     else:
         st.caption("No open investment profiles detected.")
 
+# --- TAB 3: DYNAMIC RANKINGS LEADERBOARD ---
+with tab3:
+    st.markdown("### 🏆 Elite Trader Standings")
+    st.caption("Rankings are derived instantly from Net Worth (Cash Wallet + Total Value of Open Stock Assets).")
+    
+    # 1. Pull all distinct registered user accounts
+    conn = sqlite3.connect(DB_FILE)
+    all_users = pd.read_sql_query("SELECT username, balance FROM users", conn)
+    all_portfolio = pd.read_sql_query("SELECT username, ticker, quantity FROM portfolio WHERE quantity > 0", conn)
+    conn.close()
+    
+    leaderboard_data = []
+    
+    # 2. Iterate through users to mathematically combine cash and stock value
+    for idx, user_row in all_users.iterrows():
+        u_name = user_row['username']
+        cash_wallet = user_row['balance']
+        
+        # Calculate the live market value of this user's current holdings
+        user_shares = all_portfolio[all_portfolio['username'] == u_name]
+        stock_asset_worth = 0.0
+        
+        for p_idx, share_row in user_shares.iterrows():
+            t_sym = share_row['ticker']
+            t_qty = share_row['quantity']
+            
+            # Read real-time price from background cache
+            try:
+                curr_price = st.session_state.market_cache[t_sym]["price"] if t_sym in st.session_state.market_cache else 0.0
+            except:
+                curr_price = 0.0
+            stock_asset_worth += (t_qty * curr_price)
+            
+        net_worth = cash_wallet + stock_asset_worth
+        net_profit_loss = net_worth - 10000000.0  # Profit vs starting 1Cr capital
+        
+        leaderboard_data.append({
+            "User": u_name.upper(),
+            "Total Net Worth": net_worth,
+            "Total Returns": net_profit_loss
+        })
+        
+    # 3. Compile and sort dataframe securely by highest Net Worth
+    if leaderboard_data:
+        df_leaderboard = pd.DataFrame(leaderboard_data)
+        df_leaderboard = df_leaderboard.sort_values(by="Total Net Worth", ascending=False).reset_index(drop=True)
+        df_leaderboard.index += 1 # Format index column to display positions starting at Rank 1
+        
+        # Format currency strings cleanly for high readability
+        df_leaderboard["Total Net Worth"] = df_leaderboard["Total Net Worth"].apply(lambda x: f"₹{x:,.2f}")
+        df_leaderboard["Total Returns"] = df_leaderboard["Total Returns"].apply(lambda x: f"₹{x:+,.2f}")
+        
+        st.table(df_leaderboard)
+    else:
+        st.caption("No simulation records loaded in database storage arrays.")
+
 # --- BACKGROUND REFRESH & BACKGROUND SYNC (15s Loop Optimization) ---
 time.sleep(15)
 global_market_sync()
 st.rerun()
-            
