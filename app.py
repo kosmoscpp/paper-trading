@@ -10,15 +10,13 @@ import os
 st.set_page_config(page_title="NSE Terminal", layout="centered", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
-        .stApp { background-color: #000000; color: #e3e3e3; }
-        .main-title { font-weight: 800; font-size: 1.5rem; text-align: center; }
-        .buy-btn { background-color: #00e676 !important; color: #000 !important; }
-        .sell-btn { background-color: #ff1744 !important; color: #fff !important; }
+        .stApp { background-color: #000000; color: #ffffff; }
+        .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
         [data-testid="stMetricValue"] { font-size: 1.2rem; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- DB & CACHE INIT ---
+# --- DATABASE & SYNC ---
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(DATA_DIR, "userdata.db")
@@ -32,7 +30,6 @@ def init_db():
 
 init_db()
 
-# --- MARKET MATRIX ---
 STOCK_DICT = {
     "Reliance": "RELIANCE.NS", "TCS": "TCS.NS", "Infosys": "INFY.NS", "HDFC Bank": "HDFCBANK.NS",
     "ICICI": "ICICIBANK.NS", "SBI": "SBIN.NS", "ITC": "ITC.NS", "HUL": "HINDUNILVR.NS",
@@ -44,68 +41,63 @@ STOCK_DICT = {
 if "market_cache" not in st.session_state: st.session_state.market_cache = {}
 
 def global_market_sync():
-    ticker_str = " ".join(STOCK_DICT.values())
-    data = yf.download(ticker_str, period="5d", interval="5m", progress=False)
-    for ticker in STOCK_DICT.values():
-        try:
-            # Handle multi-index column structures from yfinance
-            df = data['Close'][ticker].dropna() if 'Close' in data.columns else data[ticker].dropna()
-            st.session_state.market_cache[ticker] = {"price": float(df.iloc[-1]), "history": data[ticker] if 'Open' in data[ticker].columns else data}
-        except: pass
+    try:
+        # Use a single fetch for all
+        data = yf.download(list(STOCK_DICT.values()), period="5d", interval="5m", group_by='ticker', progress=False)
+        for name, sym in STOCK_DICT.items():
+            df = data[sym].dropna()
+            if not df.empty:
+                st.session_state.market_cache[sym] = {"price": float(df['Close'].iloc[-1]), "history": df}
+    except: pass
 
 if not st.session_state.market_cache: global_market_sync()
 
-# --- AUTH LOGIC (Simplified) ---
+# --- UI LOGIC ---
 if "user" not in st.session_state:
-    st.markdown("<h1 class='main-title'>🔐 Terminal</h1>", unsafe_allow_html=True)
-    user = st.text_input("Username").strip().lower()
-    pin = st.text_input("PIN", type="password")
-    if st.button("Enter"):
-        st.session_state.user = user
-        st.rerun()
+    st.markdown("### 🔐 Terminal")
+    st.session_state.user = st.text_input("Username").strip().lower()
+    if st.button("Enter"): st.rerun()
     st.stop()
 
-# --- MODAL FOR TRADES ---
-@st.dialog("Execute Trade")
-def trade_modal(ticker, side):
-    qty = st.number_input("Shares Quantity", min_value=1, step=1)
-    sl = st.number_input("Stop Loss (₹)", value=0.0)
-    tp = st.number_input("Take Profit (₹)", value=0.0)
-    if st.button(f"CONFIRM {side}"):
-        st.success(f"Order processed for {ticker}")
-        time.sleep(1); st.rerun()
+ticker_name = st.selectbox("Market Instrument", list(STOCK_DICT.keys()))
+sym = STOCK_DICT[ticker_name]
 
-# --- UI LAYOUT ---
-st.markdown(f"**Operator:** {st.session_state.user.upper()}")
-ticker = st.selectbox("Market Instrument", list(STOCK_DICT.keys()))
-sym = STOCK_DICT[ticker]
-
-# --- TABS ---
 t1, t2, t3 = st.tabs(["🛒", "💼", "🏆"])
 
 with t1:
+    # --- CHART ---
     if sym in st.session_state.market_cache:
         d = st.session_state.market_cache[sym]['history']
         fig = go.Figure(data=[go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'])])
         fig.update_layout(template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), height=300, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
-        
+    
+    # --- BUY/SELL ---
     c1, c2 = st.columns(2)
     with c1: 
-        if st.button("BUY", key="buy", use_container_width=True): trade_modal(sym, "BUY")
+        if st.button("BUY", type="primary"): st.info("Trade Modal Active")
     with c2: 
-        if st.button("SELL", key="sell", use_container_width=True): trade_modal(sym, "SELL")
+        if st.button("SELL", type="primary"): st.info("Trade Modal Active")
 
 with t2:
     st.subheader("Portfolio")
-    # Add dummy data for visual logic
-    df = pd.DataFrame({"Asset": ["RELIANCE", "TCS"], "P&L": [500, -200]})
-    st.dataframe(df.style.map(lambda v: 'color: green' if v > 0 else 'color: red', subset=['P&L']), use_container_width=True)
+    conn = sqlite3.connect(DB_FILE)
+    # Corrected Portfolio Query
+    df = pd.read_sql_query("SELECT ticker AS Asset, quantity AS Qty, avg_price AS 'Avg Price', stop_loss AS SL, take_profit AS TP FROM portfolio WHERE username = ?", conn, params=(st.session_state.user,))
+    conn.close()
+    
+    if not df.empty:
+        # Calculate P/L live
+        df['Current Price'] = df['Asset'].map(lambda x: st.session_state.market_cache.get(x, {}).get('price', 0))
+        df['P/L'] = (df['Current Price'] - df['Avg Price']) * df['Qty']
+        st.dataframe(df.style.map(lambda v: 'color: green' if v > 0 else 'color: red', subset=['P/L']), use_container_width=True)
+    else:
+        st.write("No holdings.")
 
 with t3:
     st.subheader("Leaderboard")
-    st.info("Rankings active.")
+    st.write("Rankings based on total Net Worth.")
 
-# --- AUTO SYNC ---
-if time.time() % 30 < 1: global_market_sync()
+# Periodic sync
+if time.time() % 60 < 2: global_market_sync()
         
