@@ -32,22 +32,22 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, pin TEXT, balance REAL)''')
-    # Added stop_loss and take_profit columns
+    # FIX: Kept ONLY username and ticker as the primary key constraint
     c.execute('''CREATE TABLE IF NOT EXISTS portfolio (
                     username TEXT, 
                     ticker TEXT, 
                     quantity INTEGER, 
                     avg_price REAL, 
-                    stop_loss REAL, 
-                    take_profit REAL, 
+                    stop_loss REAL DEFAULT 0.0, 
+                    take_profit REAL DEFAULT 0.0, 
                     PRIMARY KEY (username, ticker))''')
     
-    # Dynamic migration check to add columns if updating an old database file
     try:
         c.execute("ALTER TABLE portfolio ADD COLUMN stop_loss REAL DEFAULT 0.0")
+    except: pass
+    try:
         c.execute("ALTER TABLE portfolio ADD COLUMN take_profit REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass # Columns already exist
+    except: pass
         
     conn.commit()
     conn.close()
@@ -85,7 +85,6 @@ if "last_sync_time" not in st.session_state:
 def process_auto_triggers():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Grab all active open positions
     c.execute("SELECT username, ticker, quantity, stop_loss, take_profit FROM portfolio WHERE quantity > 0")
     positions = c.fetchall()
     
@@ -93,58 +92,68 @@ def process_auto_triggers():
         if ticker in st.session_state.market_cache:
             current_p = st.session_state.market_cache[ticker]["price"]
             triggered = False
-            reason = ""
             
-            # Check Stop Loss (Trigger if price falls below SL, given SL is set > 0)
             if sl > 0.0 and current_p <= sl:
                 triggered = True
-                reason = "STOP LOSS 🔴"
-            # Check Take Profit (Trigger if price rises above TP, given TP is set > 0)
             elif tp > 0.0 and current_p >= tp:
                 triggered = True
-                reason = "TAKE PROFIT 🟢"
                 
             if triggered:
-                # Calculate return capital and update user's account balance
                 gain_capital = qty * current_p
                 c.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (gain_capital, username))
-                # Wipe out inventory quantity for this stock asset profile
                 c.execute("UPDATE portfolio SET quantity = 0 WHERE username = ? AND ticker = ?", (username, ticker))
                 
-                # If the triggered user happens to be the current viewer, update their live local session state
                 if st.session_state.get("user") == username:
                     st.session_state.balance += gain_capital
                     
     conn.commit()
     conn.close()
 
-# --- BUNDLED & OPTIMIZED SYNC ENGINE (HIGH SPEED / LOW CPU) ---
+# --- BUNDLED & OPTIMIZED SYNC ENGINE (FIXED MULTIINDEX PARSING) ---
 def global_market_sync(force=False):
     current_time = time.time()
-    if not force and (current_time - st.session_state.last_sync_time < 30) and st.session_state.market_cache:
+    if not force and (current_time - st.session_state.last_sync_time < 15) and st.session_state.market_cache:
         return
 
     ticker_string = " ".join(STOCK_DICT.values())
     try:
-        data = yf.download(ticker_string, period="5d", interval="5m", group_by='ticker', progress=False)
+        # Download historical periods
+        data = yf.download(ticker_string, period="5d", interval="5m", progress=False)
         
         for name, ticker in STOCK_DICT.items():
-            if ticker in data.columns.levels[0]:
-                ticker_df = data[ticker].dropna()
-                if not ticker_df.empty:
-                    st.session_state.market_cache[ticker] = {
-                        "price": float(ticker_df["Close"].iloc[-1]),
-                        "history": ticker_df.tail(35)
-                    }
+            # Robust parsing of yfinance columns multi-index formats
+            if ticker in data.columns.get_level_values(1):
+                # Standard format where level 0 is attributes, level 1 is ticker
+                ticker_df = pd.DataFrame({
+                    'Open': data['Open'][ticker],
+                    'High': data['High'][ticker],
+                    'Low': data['Low'][ticker],
+                    'Close': data['Close'][ticker]
+                }).dropna()
+            elif ticker in data.columns.get_level_values(0):
+                # Inverse format
+                ticker_df = pd.DataFrame({
+                    'Open': data[ticker]['Open'],
+                    'High': data[ticker]['High'],
+                    'Low': data[ticker]['Low'],
+                    'Close': data[ticker]['Close']
+                }).dropna()
+            else:
+                continue
+
+            if not ticker_df.empty:
+                st.session_state.market_cache[ticker] = {
+                    "price": float(ticker_df["Close"].iloc[-1]),
+                    "history": ticker_df.tail(35)
+                }
+                
         st.session_state.last_sync_time = current_time
-        
-        # RUN THE TRIGGER ENGINE RIGHT AFTER REFRESHING DATA FEEDS
         process_auto_triggers()
     except Exception as e:
         pass
 
 if not st.session_state.market_cache:
-    with st.spinner("Initializing optimized global market feeds..."):
+    with st.spinner("Initializing live multi-sector matrices..."):
         global_market_sync(force=True)
 
 # --- CLEAN HEADER ---
@@ -216,7 +225,7 @@ with tab1:
         )
         
         chart_df = live_history.copy()
-        chart_df.index = chart_df.index.strftime('%H:%M')
+        chart_df.index = pd.to_datetime(chart_df.index).strftime('%H:%M')
         
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
@@ -231,13 +240,12 @@ with tab1:
         )
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
     else:
-        st.error("Streaming connection dropped. Resynchronizing baseline matrix...")
+        st.error("Connecting to National Stock Exchange data matrices...")
         live_price = 0.0
 
     st.markdown("### ⚡ Execution Window")
     trade_qty = st.number_input("Shares Quantity", min_value=1, step=1, value=5, key="order_qty")
     
-    # ADDED USER INPUT WINDOWS FOR TARGET LIMITS DURING ORDER EXECUTION
     col_sl, col_tp = st.columns(2)
     with col_sl:
         input_sl = st.number_input("Set Stop Loss Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
@@ -266,7 +274,6 @@ with tab1:
                     ex_qty, ex_avg = existing_asset
                     new_qty = ex_qty + trade_qty
                     new_avg = ((ex_qty * ex_avg) + order_value) / new_qty
-                    # Update targets along with average purchase price updates
                     c.execute("UPDATE portfolio SET quantity = ?, avg_price = ?, stop_loss = ?, take_profit = ? WHERE username = ? AND ticker = ?", 
                               (new_qty, new_avg, input_sl, input_tp, user_input, ticker_symbol))
                 else:
@@ -306,7 +313,6 @@ with tab1:
 with tab2:
     st.markdown("### Asset Allocation Matrix")
     conn = sqlite3.connect(DB_FILE)
-    # Added stop_loss and take_profit metrics to output view mapping
     df_holdings = pd.read_sql_query("SELECT ticker, quantity, avg_price, stop_loss, take_profit FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_input,))
     conn.close()
     
@@ -360,3 +366,49 @@ with tab3:
     all_users = pd.read_sql_query("SELECT username, balance FROM users", conn)
     all_portfolio = pd.read_sql_query("SELECT username, ticker, quantity FROM portfolio WHERE quantity > 0", conn)
     conn.close()
+    
+    leaderboard_data = []
+    
+    for idx, user_row in all_users.iterrows():
+        u_name = user_row['username']
+        cash_wallet = user_row['balance']
+        
+        user_shares = all_portfolio[all_portfolio['username'] == u_name]
+        stock_asset_worth = 0.0
+        
+        for p_idx, share_row in user_shares.iterrows():
+            t_sym = share_row['ticker']
+            t_qty = share_row['quantity']
+            
+            try:
+                curr_price = st.session_state.market_cache[t_sym]["price"] if t_sym in st.session_state.market_cache else 0.0
+            except:
+                curr_price = 0.0
+            stock_asset_worth += (t_qty * curr_price)
+            
+        net_worth = cash_wallet + stock_asset_worth
+        net_profit_loss = net_worth - 10000000.0
+        
+        leaderboard_data.append({
+            "User": u_name.upper(),
+            "Total Net Worth": net_worth,
+            "Total Returns": net_profit_loss
+        })
+        
+    if leaderboard_data:
+        df_leaderboard = pd.DataFrame(leaderboard_data)
+        df_leaderboard = df_leaderboard.sort_values(by="Total Net Worth", ascending=False).reset_index(drop=True)
+        df_leaderboard.index += 1
+        
+        df_leaderboard["Total Net Worth"] = df_leaderboard["Total Net Worth"].apply(lambda x: f"₹{x:,.2f}")
+        df_leaderboard["Total Returns"] = df_leaderboard["Total Returns"].apply(lambda x: f"₹{x:+,.2f}")
+        
+        st.table(df_leaderboard)
+    else:
+        st.caption("No simulation records loaded in database storage arrays.")
+
+# --- DECOUPLED LOOP REFRESH TICK RATE ---
+time.sleep(15)
+global_market_sync()
+st.rerun()
+        
