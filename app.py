@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import time
 import os
 
-# --- APP CONFIG & PROFESSIONAL DARK THEME ---
+# --- APP CONFIG & COMPACT TRADINGVIEW THEME ---
 st.set_page_config(page_title="NSE Trading Terminal", layout="centered", initial_sidebar_state="collapsed")
 
 st.markdown("""
@@ -15,26 +15,26 @@ st.markdown("""
         .stApp { background-color: #000000; color: #ffffff; font-family: 'Segoe UI', sans-serif; }
         
         /* Compact TradingView Style Header */
-        .tv-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 5px; border-bottom: 1px solid #1e222d; margin-bottom: 10px; }
+        .tv-header { display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid #1e222d; margin-bottom: 5px; }
         .tv-operator { font-size: 0.85rem; color: #848e9c; font-weight: 600; }
         .tv-networth { font-size: 1.1rem; color: #26a69a; font-weight: 700; text-align: right; }
         
-        /* Metric Styling */
-        .price-box { padding: 10px 0; border-bottom: 1px solid #1e222d; margin-bottom: 15px; }
-        .price-title { font-size: 1.4rem; font-weight: 700; margin: 0; color: #ffffff; }
-        .price-value { font-size: 1.8rem; font-weight: 700; color: #00e676; margin: 5px 0 0 0; }
+        /* Ultra-tight Metric Styling to prevent vertical scroll */
+        .price-box { padding: 2px 0; border-bottom: 1px solid #1e222d; margin-bottom: 10px; }
+        .price-title { font-size: 1.2rem; font-weight: 700; margin: 0; color: #ffffff; display: inline-block; }
+        .price-value { font-size: 1.5rem; font-weight: 700; color: #00e676; display: inline-block; float: right; margin: 0; }
         
         /* Flat UI execution panel inputs */
         div[data-baseweb="input"] input { background-color: #1c2030 !important; color: #ffffff !important; border-radius: 6px !important; border: 1px solid #2f3342 !important; }
         div[data-baseweb="select"] > div { background-color: #1c2030 !important; color: #ffffff !important; border-radius: 6px !important; border: 1px solid #2f3342 !important; }
         
-        /* Native TradingView Buy/Sell Button Overrides */
-        .buy-btn button { background-color: #26a69a !important; color: #ffffff !important; width: 100%; border-radius: 6px; font-weight: 700; height: 45px; border: none; }
-        .sell-btn button { background-color: #ef5350 !important; color: #ffffff !important; width: 100%; border-radius: 6px; font-weight: 700; height: 45px; border: none; }
+        /* Inline Row Button Adjustments */
+        .buy-btn button { background-color: #26a69a !important; color: #ffffff !important; width: 100%; border-radius: 6px; font-weight: 700; height: 42px; border: none; margin-top: 24px; }
+        .sell-btn button { background-color: #ef5350 !important; color: #ffffff !important; width: 100%; border-radius: 6px; font-weight: 700; height: 42px; border: none; margin-top: 24px; }
         
         /* Tab Navigation Adjustments */
         .stTabs [data-baseweb="tab-list"] { gap: 10px; justify-content: flex-end; border-bottom: 1px solid #1e222d; }
-        .stTabs [data-baseweb="tab"] { font-size: 1.3rem !important; padding: 10px 15px !important; color: #848e9c; }
+        .stTabs [data-baseweb="tab"] { font-size: 1.2rem !important; padding: 5px 15px !important; color: #848e9c; }
         .stTabs [aria-selected="true"] { color: #2962ff !important; border-bottom-color: #2962ff !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -74,7 +74,8 @@ if "last_sync_time" not in st.session_state: st.session_state.last_sync_time = 0
 # --- REAL-TIME EXCHANGE DATA SYNC ENGINE ---
 def global_market_sync(force=False):
     current_time = time.time()
-    if not force and (current_time - st.session_state.last_sync_time < 15) and st.session_state.market_cache:
+    # Adjusted sync gate down to 10 seconds
+    if not force and (current_time - st.session_state.last_sync_time < 10) and st.session_state.market_cache:
         return
 
     ticker_string = " ".join(STOCK_DICT.values())
@@ -117,31 +118,32 @@ if "authenticated" not in st.session_state:
 if not st.session_state.authenticated:
     st.markdown("<h2 style='text-align: center; margin-top: 40px;'>⚡ SECURE ACCESS TERMINAL</h2>", unsafe_allow_html=True)
     u_input = st.text_input("Username / Operator Key").strip().lower()
-    p_input = st.text_input("4-Digit Access PIN", type="password").strip()
     
-    if st.button("INITIALIZE SECURE SYSTEM LINK"):
-        if u_input and p_input:
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute("SELECT pin, balance FROM users WHERE username = ?", (u_input,))
-            record = c.fetchone()
-            
-            if record:
-                db_pin, current_balance = record
-                if db_pin != p_input:
-                    st.error("❌ Invalid security credentials.")
-                    conn.close()
-                    st.stop()
-            else:
-                current_balance = 10000000.0
-                c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (u_input, p_input, current_balance))
-                conn.commit()
-            conn.close()
-            
-            st.session_state.authenticated = True
-            st.session_state.user = u_input
-            st.session_state.balance = current_balance
-            st.rerun()
+    # Pressing Enter inside this field automatically triggers execution logic
+    p_input = st.text_input("4-Digit Access PIN (Press Enter to log in)", type="password").strip()
+    
+    if u_input and p_input:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT pin, balance FROM users WHERE username = ?", (u_input,))
+        record = c.fetchone()
+        
+        if record:
+            db_pin, current_balance = record
+            if db_pin != p_input:
+                st.error("❌ Invalid security credentials.")
+                conn.close()
+                st.stop()
+        else:
+            current_balance = 10000000.0
+            c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (u_input, p_input, current_balance))
+            conn.commit()
+        conn.close()
+        
+        st.session_state.authenticated = True
+        st.session_state.user = u_input
+        st.session_state.balance = current_balance
+        st.rerun()
     st.stop()
 
 # --- FETCH REFRESHED USER SNAPSHOT ---
@@ -200,7 +202,7 @@ with tab1:
         )])
         fig.update_layout(
             template="plotly_dark", xaxis_rangeslider_visible=False,
-            margin=dict(l=5, r=5, t=5, b=5), height=270,
+            margin=dict(l=5, r=5, t=5, b=5), height=240,  # Compacted height to protect vertical constraints
             paper_bgcolor='#000000', plot_bgcolor='#000000',
             xaxis=dict(showgrid=False, color='#848e9c'),
             yaxis=dict(showgrid=True, gridcolor='#1e222d', color='#848e9c', side="right")
@@ -210,21 +212,21 @@ with tab1:
         st.error("Market asset sync offline.")
         live_price = 0.0
 
-    # --- FLAT ON-PAGE EXECUTION CONTAINER ---
-    st.markdown("<br>", unsafe_allow_html=True)
-    qty_input = st.number_input("Shares Quantity", min_value=1, step=1, value=5)
+    # --- SINGLE ROW FLAT ORDER FIELD CONTROLS ---
+    col_qty, col_buy_btn, col_sell_btn = st.columns([2, 2, 2])
+    
+    with col_qty:
+        qty_input = st.number_input("Qty", min_value=1, step=1, value=5)
         
     order_exposure = qty_input * live_price
-    st.caption(f"Estimated Execution Cost: ₹{order_exposure:,.2f}")
     
-    col_buy, col_sell = st.columns(2)
-    with col_buy:
+    with col_buy_btn:
         st.markdown('<div class="buy-btn">', unsafe_allow_html=True)
         if st.button("BUY", key="exec_buy"):
             if order_exposure > current_cash_balance:
-                st.error("Insufficient Cash Margin Balance.")
+                st.error("Insufficient Cash Margin.")
             elif live_price == 0.0:
-                st.error("Invalid execution data frame.")
+                st.error("Invalid frame.")
             else:
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
@@ -246,11 +248,11 @@ with tab1:
                 conn.commit()
                 conn.close()
                 st.success("Market Buy order filled!")
-                time.sleep(0.4)
+                time.sleep(0.3)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
         
-    with col_sell:
+    with col_sell_btn:
         st.markdown('<div class="sell-btn">', unsafe_allow_html=True)
         if st.button("SELL", key="exec_sell"):
             conn = sqlite3.connect(DB_FILE)
@@ -259,7 +261,7 @@ with tab1:
             exists = c.fetchone()
             
             if not exists or exists[0] < qty_input:
-                st.error("Insufficient tracking inventory shares.")
+                st.error("Insufficient shares.")
                 conn.close()
             else:
                 updated_qty = exists[0] - qty_input
@@ -269,10 +271,12 @@ with tab1:
                 c.execute("UPDATE portfolio SET quantity = ? WHERE username = ? AND ticker = ?", (updated_qty, user_id, ticker_symbol))
                 conn.commit()
                 conn.close()
-                st.success("Market Sell liquidations complete!")
-                time.sleep(0.4)
+                st.success("Market Sell complete!")
+                time.sleep(0.3)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+        
+    st.caption(f"Estimated Cost: ₹{order_exposure:,.2f}")
 
 # --- TAB 2: PORTFOLIO SUMMARY LEDGER ---
 with tab2:
@@ -350,8 +354,8 @@ with tab3:
             use_container_width=True
         )
 
-# --- STEADY CONTROLLED DELAY TICK REFRESH ---
-time.sleep(15)
+# --- STEADY 10-SECOND TICK REFRESH ---
+time.sleep(10)
 global_market_sync()
 st.rerun()
-        
+                
