@@ -53,8 +53,6 @@ def init_db():
                     ticker TEXT, 
                     quantity INTEGER, 
                     avg_price REAL, 
-                    stop_loss REAL DEFAULT 0.0, 
-                    take_profit REAL DEFAULT 0.0, 
                     PRIMARY KEY (username, ticker))''')
     conn.commit()
     conn.close()
@@ -72,34 +70,6 @@ STOCK_DICT = {
 
 if "market_cache" not in st.session_state: st.session_state.market_cache = {}
 if "last_sync_time" not in st.session_state: st.session_state.last_sync_time = 0.0
-
-# --- THE AUTO TARGET TRACKING TRIGGER ENGINE ---
-def process_auto_triggers():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT username, ticker, quantity, stop_loss, take_profit FROM portfolio WHERE quantity > 0")
-    positions = c.fetchall()
-    
-    for username, ticker, qty, sl, tp in positions:
-        if ticker in st.session_state.market_cache:
-            current_p = st.session_state.market_cache[ticker]["price"]
-            triggered = False
-            
-            # Boundaries protect against the 0.0 value wipe drop out
-            if sl > 0.0 and current_p <= sl:
-                triggered = True
-            elif tp > 0.0 and current_p >= tp:
-                triggered = True
-                
-            if triggered:
-                gain_capital = qty * current_p
-                c.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (gain_capital, username))
-                c.execute("UPDATE portfolio SET quantity = 0 WHERE username = ? AND ticker = ?", (username, ticker))
-                if st.session_state.get("user") == username:
-                    st.session_state.balance += gain_capital
-                    
-    conn.commit()
-    conn.close()
 
 # --- REAL-TIME EXCHANGE DATA SYNC ENGINE ---
 def global_market_sync(force=False):
@@ -132,7 +102,6 @@ def global_market_sync(force=False):
                 }
                 
         st.session_state.last_sync_time = current_time
-        process_auto_triggers()
     except:
         pass
 
@@ -241,15 +210,9 @@ with tab1:
         st.error("Market asset sync offline.")
         live_price = 0.0
 
-    # --- FLAT ON-PAGE EXECUTION CONTAINER (No popup modals) ---
+    # --- FLAT ON-PAGE EXECUTION CONTAINER ---
     st.markdown("<br>", unsafe_allow_html=True)
     qty_input = st.number_input("Shares Quantity", min_value=1, step=1, value=5)
-    
-    col_sl, col_tp = st.columns(2)
-    with col_sl:
-        sl_input = st.number_input("Stop Loss Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
-    with col_tp:
-        tp_input = st.number_input("Take Profit Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
         
     order_exposure = qty_input * live_price
     st.caption(f"Estimated Execution Cost: ₹{order_exposure:,.2f}")
@@ -275,11 +238,11 @@ with tab1:
                     old_qty, old_avg = exists
                     updated_qty = old_qty + qty_input
                     updated_avg = ((old_qty * old_avg) + order_exposure) / updated_qty
-                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ?, stop_loss = ?, take_profit = ? WHERE username = ? AND ticker = ?", 
-                              (updated_qty, updated_avg, sl_input, tp_input, user_id, ticker_symbol))
+                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ? WHERE username = ? AND ticker = ?", 
+                              (updated_qty, updated_avg, user_id, ticker_symbol))
                 else:
-                    c.execute("INSERT OR REPLACE INTO portfolio (username, ticker, quantity, avg_price, stop_loss, take_profit) VALUES (?, ?, ?, ?, ?, ?)", 
-                              (user_id, ticker_symbol, qty_input, live_price, sl_input, tp_input))
+                    c.execute("INSERT OR REPLACE INTO portfolio (username, ticker, quantity, avg_price) VALUES (?, ?, ?, ?)", 
+                              (user_id, ticker_symbol, qty_input, live_price))
                 conn.commit()
                 conn.close()
                 st.success("Market Buy order filled!")
@@ -311,11 +274,11 @@ with tab1:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- TAB 2: ADVANCED REAL-TIME PORTFOLIO LEDGER ---
+# --- TAB 2: PORTFOLIO SUMMARY LEDGER ---
 with tab2:
     st.markdown("### Open Investment Matrix")
     conn = sqlite3.connect(DB_FILE)
-    df_portfolio = pd.read_sql_query("SELECT ticker, quantity, avg_price, stop_loss, take_profit FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_id,))
+    df_portfolio = pd.read_sql_query("SELECT ticker, quantity, avg_price FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_id,))
     conn.close()
     
     if not df_portfolio.empty:
@@ -324,8 +287,6 @@ with tab2:
             tk = row['ticker']
             q = row['quantity']
             avg_b = row['avg_price']
-            sl_v = row['stop_loss']
-            tp_v = row['take_profit']
             
             clean_name = next((k for k, v in STOCK_DICT.items() if v == tk), tk)
             curr_market_p = st.session_state.market_cache.get(tk, {}).get('price', avg_b)
@@ -335,18 +296,14 @@ with tab2:
             net_pnl = value_current - value_invested
             
             portfolio_rows.append({
-                "Asset": clean_name, "Qty": q, "Avg Buy Price": avg_b, "Current Price": curr_market_p,
-                "Stop Loss": sl_v if sl_v > 0 else None, "Take Profit": tp_v if tp_v > 0 else None, "P&L (₹)": net_pnl
+                "Asset": clean_name, "Qty": q, "Avg Buy Price": avg_b, "Current Price": curr_market_p, "P&L (₹)": net_pnl
             })
             
         df_display = pd.DataFrame(portfolio_rows)
         
         st.dataframe(
             df_display.style.format({
-                "Avg Buy Price": "₹{:,.2f}", "Current Price": "₹{:,.2f}",
-                "Stop Loss": lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "None", 
-                "Take Profit": lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "None", 
-                "P&L (₹)": "₹{:,.2f}"
+                "Avg Buy Price": "₹{:,.2f}", "Current Price": "₹{:,.2f}", "P&L (₹)": "₹{:,.2f}"
             }).map(lambda val: 'color: #00e676; font-weight: bold;' if val > 0 else 'color: #ff1744; font-weight: bold;', subset=['P&L (₹)']),
             use_container_width=True, hide_index=True
         )
@@ -397,4 +354,4 @@ with tab3:
 time.sleep(15)
 global_market_sync()
 st.rerun()
-#kaash kaam kare ab...
+        
