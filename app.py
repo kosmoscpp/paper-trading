@@ -24,23 +24,22 @@ st.markdown("""
         .price-title { font-size: 1.4rem; font-weight: 700; margin: 0; color: #ffffff; }
         .price-value { font-size: 1.8rem; font-weight: 700; color: #00e676; margin: 5px 0 0 0; }
         
-        /* Flat UI input fields */
+        /* Flat UI execution panel inputs */
         div[data-baseweb="input"] input { background-color: #1c2030 !important; color: #ffffff !important; border-radius: 6px !important; border: 1px solid #2f3342 !important; }
         div[data-baseweb="select"] > div { background-color: #1c2030 !important; color: #ffffff !important; border-radius: 6px !important; border: 1px solid #2f3342 !important; }
         
-        /* Trading View Native Buy/Sell Buttons */
-        .stButton>button { width: 100%; border-radius: 6px; font-weight: 700; font-size: 1rem; height: 45px; transition: all 0.2s; border: none; }
-        button[data-testid="baseButton-primary"] { background-color: #26a69a !important; color: #ffffff !important; } /* Buy Green */
-        button[data-testid="baseButton-secondary"] { background-color: #ef5350 !important; color: #ffffff !important; } /* Sell Red */
+        /* Native TradingView Buy/Sell Button Overrides */
+        .buy-btn button { background-color: #26a69a !important; color: #ffffff !important; width: 100%; border-radius: 6px; font-weight: 700; height: 45px; border: none; }
+        .sell-btn button { background-color: #ef5350 !important; color: #ffffff !important; width: 100%; border-radius: 6px; font-weight: 700; height: 45px; border: none; }
         
-        /* Tab Emojis Custom Sizing */
+        /* Tab Navigation Adjustments */
         .stTabs [data-baseweb="tab-list"] { gap: 10px; justify-content: flex-end; border-bottom: 1px solid #1e222d; }
         .stTabs [data-baseweb="tab"] { font-size: 1.3rem !important; padding: 10px 15px !important; color: #848e9c; }
         .stTabs [aria-selected="true"] { color: #2962ff !important; border-bottom-color: #2962ff !important; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- DIRECTORY & PERSISTENT DATABASE STORAGE ---
+# --- PERSISTENT DATABASE SETUP ---
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(DATA_DIR, "userdata.db")
@@ -62,7 +61,7 @@ def init_db():
 
 init_db()
 
-# --- THE RADAR SYSTEM (18 DIRECT SECTOR TICKERS) ---
+# --- THE MARKETS DICTIONARY ---
 STOCK_DICT = {
     "Reliance": "RELIANCE.NS", "TCS": "TCS.NS", "Infosys": "INFY.NS", "HDFC Bank": "HDFCBANK.NS",
     "ICICI Bank": "ICICIBANK.NS", "SBI": "SBIN.NS", "ITC": "ITC.NS", "Hindustan Unilever": "HINDUNILVR.NS",
@@ -74,7 +73,7 @@ STOCK_DICT = {
 if "market_cache" not in st.session_state: st.session_state.market_cache = {}
 if "last_sync_time" not in st.session_state: st.session_state.last_sync_time = 0.0
 
-# --- TRACKING ENGINE: RUNS TRIGGERS SAFE FROM FALSE AUTO-LIQUIDATIONS ---
+# --- THE AUTO TARGET TRACKING TRIGGER ENGINE ---
 def process_auto_triggers():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -86,7 +85,7 @@ def process_auto_triggers():
             current_p = st.session_state.market_cache[ticker]["price"]
             triggered = False
             
-            # Boundary check (> 0) to prevent instant 0.0 trigger traps
+            # Boundaries protect against the 0.0 value wipe drop out
             if sl > 0.0 and current_p <= sl:
                 triggered = True
             elif tp > 0.0 and current_p >= tp:
@@ -102,7 +101,7 @@ def process_auto_triggers():
     conn.commit()
     conn.close()
 
-# --- HIGH-SPEED ENGINE FOR NETWORK EFFICIENCY ---
+# --- REAL-TIME EXCHANGE DATA SYNC ENGINE ---
 def global_market_sync(force=False):
     current_time = time.time()
     if not force and (current_time - st.session_state.last_sync_time < 15) and st.session_state.market_cache:
@@ -140,7 +139,7 @@ def global_market_sync(force=False):
 if not st.session_state.market_cache:
     global_market_sync(force=True)
 
-# --- TERMINAL AUTHENTICATION GATEWAYS ---
+# --- SECURITY SYSTEM LAYER GATEWAY ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user = ""
@@ -148,38 +147,35 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state.authenticated:
     st.markdown("<h2 style='text-align: center; margin-top: 40px;'>⚡ SECURE ACCESS TERMINAL</h2>", unsafe_allow_html=True)
-    with st.container():
-        st.markdown('<div style="background-color: #1c2030; padding: 25px; border-radius: 8px; border: 1px solid #2f3342;">', unsafe_allow_html=True)
-        u_input = st.text_input("Username / Operator Key").strip().lower()
-        p_input = st.text_input("4-Digit Access PIN", type="password").strip()
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if st.button("INITIALIZE SECURE SYSTEM LINK"):
-            if u_input and p_input:
-                conn = sqlite3.connect(DB_FILE)
-                c = conn.cursor()
-                c.execute("SELECT pin, balance FROM users WHERE username = ?", (u_input,))
-                record = c.fetchone()
-                
-                if record:
-                    db_pin, current_balance = record
-                    if db_pin != p_input:
-                        st.error("❌ Invalid security credentials.")
-                        conn.close()
-                        st.stop()
-                else:
-                    current_balance = 10000000.0
-                    c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (u_input, p_input, current_balance))
-                    conn.commit()
-                conn.close()
-                
-                st.session_state.authenticated = True
-                st.session_state.user = u_input
-                st.session_state.balance = current_balance
-                st.rerun()
-        st.stop()
+    u_input = st.text_input("Username / Operator Key").strip().lower()
+    p_input = st.text_input("4-Digit Access PIN", type="password").strip()
+    
+    if st.button("INITIALIZE SECURE SYSTEM LINK"):
+        if u_input and p_input:
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT pin, balance FROM users WHERE username = ?", (u_input,))
+            record = c.fetchone()
+            
+            if record:
+                db_pin, current_balance = record
+                if db_pin != p_input:
+                    st.error("❌ Invalid security credentials.")
+                    conn.close()
+                    st.stop()
+            else:
+                current_balance = 10000000.0
+                c.execute("INSERT INTO users (username, pin, balance) VALUES (?, ?, ?)", (u_input, p_input, current_balance))
+                conn.commit()
+            conn.close()
+            
+            st.session_state.authenticated = True
+            st.session_state.user = u_input
+            st.session_state.balance = current_balance
+            st.rerun()
+    st.stop()
 
-# --- CALCULATE LIVE VALUE MATRICES FOR NAV BAR ---
+# --- FETCH REFRESHED USER SNAPSHOT ---
 user_id = st.session_state.user
 conn = sqlite3.connect(DB_FILE)
 c = conn.cursor()
@@ -187,7 +183,6 @@ c.execute("SELECT balance FROM users WHERE username = ?", (user_id,))
 st.session_state.balance = c.fetchone()[0]
 current_cash_balance = st.session_state.balance
 
-# Pull active holding calculations to compute live Net Worth
 df_calc = pd.read_sql_query("SELECT ticker, quantity, avg_price FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_id,))
 conn.close()
 
@@ -200,22 +195,20 @@ for _, r in df_calc.iterrows():
 
 live_net_worth = current_cash_balance + total_asset_worth
 
-# --- TRADINGVIEW NATIVE STATUS TOP BAR ---
+# --- TRADINGVIEW DASHBOARD NAVBAR STATUS ---
 st.markdown(f"""
     <div class="tv-header">
-        <div class="tv-operator">● OPERATOR: {user_id.upper()}</div>
+        <div class="tv-operator">● SYSTEM LINK: {user_id.upper()}</div>
         <div class="tv-networth">Net Worth: ₹{live_net_worth:,.2f}</div>
     </div>
 """, unsafe_allow_html=True)
 
-# --- NATIVE TICKER SELECTION ---
 selected_stock_label = st.selectbox("Asset Selector", list(STOCK_DICT.keys()), label_visibility="collapsed")
 ticker_symbol = STOCK_DICT[selected_stock_label]
 
-# --- THREE NAVIGATION TAB GLYPHS ---
 tab1, tab2, tab3 = st.tabs(["🛒", "💼", "🏆"])
 
-# --- TAB 1: CHART WINDOW & ACTION FOOTERS ---
+# --- TAB 1: EMBEDDED GRAPH TRADING ROOM ---
 with tab1:
     if ticker_symbol in st.session_state.market_cache:
         live_price = st.session_state.market_cache[ticker_symbol]["price"]
@@ -228,7 +221,6 @@ with tab1:
             </div>
         """, unsafe_allow_html=True)
         
-        # Plotly Candlestick Interface Mapping (Fixed Properties Syntax)
         chart_df = live_history.copy()
         chart_df.index = pd.to_datetime(chart_df.index).strftime('%H:%M')
         
@@ -239,7 +231,7 @@ with tab1:
         )])
         fig.update_layout(
             template="plotly_dark", xaxis_rangeslider_visible=False,
-            margin=dict(l=5, r=5, t=5, b=5), height=290,
+            margin=dict(l=5, r=5, t=5, b=5), height=270,
             paper_bgcolor='#000000', plot_bgcolor='#000000',
             xaxis=dict(showgrid=False, color='#848e9c'),
             yaxis=dict(showgrid=True, gridcolor='#1e222d', color='#848e9c', side="right")
@@ -249,77 +241,77 @@ with tab1:
         st.error("Market asset sync offline.")
         live_price = 0.0
 
-    # --- IN-APP DIALOG POP-UP MODALS ---
-    @st.dialog("Order Parameters Window")
-    def open_order_modal(order_side):
-        st.markdown(f"### Market Execution: {order_side}")
-        st.markdown(f"Asset: **{selected_stock_label}** | Live Spot: **₹{live_price:,.2f}**")
-        st.markdown("---")
+    # --- FLAT ON-PAGE EXECUTION CONTAINER (No popup modals) ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    qty_input = st.number_input("Shares Quantity", min_value=1, step=1, value=5)
+    
+    col_sl, col_tp = st.columns(2)
+    with col_sl:
+        sl_input = st.number_input("Stop Loss Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
+    with col_tp:
+        tp_input = st.number_input("Take Profit Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
         
-        qty_input = st.number_input("Order Size (Shares Quantity)", min_value=1, step=1, value=10)
-        est_cost = qty_input * live_price
-        st.write(f"Total Order Exposure Value: **₹{est_cost:,.2f}**")
+    order_exposure = qty_input * live_price
+    st.caption(f"Estimated Execution Cost: ₹{order_exposure:,.2f}")
+    
+    col_buy, col_sell = st.columns(2)
+    with col_buy:
+        st.markdown('<div class="buy-btn">', unsafe_allow_html=True)
+        if st.button("BUY", key="exec_buy"):
+            if order_exposure > current_cash_balance:
+                st.error("Insufficient Cash Margin Balance.")
+            elif live_price == 0.0:
+                st.error("Invalid execution data frame.")
+            else:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                new_cash_balance = current_cash_balance - order_exposure
+                c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_cash_balance, user_id))
+                
+                c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_id, ticker_symbol))
+                exists = c.fetchone()
+                
+                if exists and exists[0] > 0:
+                    old_qty, old_avg = exists
+                    updated_qty = old_qty + qty_input
+                    updated_avg = ((old_qty * old_avg) + order_exposure) / updated_qty
+                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ?, stop_loss = ?, take_profit = ? WHERE username = ? AND ticker = ?", 
+                              (updated_qty, updated_avg, sl_input, tp_input, user_id, ticker_symbol))
+                else:
+                    c.execute("INSERT OR REPLACE INTO portfolio (username, ticker, quantity, avg_price, stop_loss, take_profit) VALUES (?, ?, ?, ?, ?, ?)", 
+                              (user_id, ticker_symbol, qty_input, live_price, sl_input, tp_input))
+                conn.commit()
+                conn.close()
+                st.success("Market Buy order filled!")
+                time.sleep(0.4)
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
         
-        sl_input = st.number_input("Risk Limit: Stop Loss Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
-        tp_input = st.number_input("Target Limit: Take Profit Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
-        
-        if st.button(f"TRANSMIT {order_side} PACKET", type="primary" if order_side == "BUY" else "secondary"):
+    with col_sell:
+        st.markdown('<div class="sell-btn">', unsafe_allow_html=True)
+        if st.button("SELL", key="exec_sell"):
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
+            c.execute("SELECT quantity FROM portfolio WHERE username = ? AND ticker = ?", (user_id, ticker_symbol))
+            exists = c.fetchone()
             
-            if order_side == "BUY":
-                if est_cost > st.session_state.balance:
-                    st.error("Execution Rejected: Insufficient Margin Balance.")
-                else:
-                    new_wallet_balance = st.session_state.balance - est_cost
-                    c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_wallet_balance, user_id))
-                    c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_id, ticker_symbol))
-                    exists = c.fetchone()
-                    
-                    if exists:
-                        old_qty, old_avg = exists
-                        updated_qty = old_qty + qty_input
-                        updated_avg = ((old_qty * old_avg) + est_cost) / updated_qty
-                        c.execute("UPDATE portfolio SET quantity = ?, avg_price = ?, stop_loss = ?, take_profit = ? WHERE username = ? AND ticker = ?", 
-                                  (updated_qty, updated_avg, sl_input, tp_input, user_id, ticker_symbol))
-                    else:
-                        c.execute("INSERT INTO portfolio VALUES (?, ?, ?, ?, ?, ?)", (user_id, ticker_symbol, qty_input, live_price, sl_input, tp_input))
-                    
-                    conn.commit()
-                    st.session_state.balance = new_wallet_balance
-                    st.success("Buy order successfully processed!")
-                    time.sleep(0.6)
-                    st.rerun()
+            if not exists or exists[0] < qty_input:
+                st.error("Insufficient tracking inventory shares.")
+                conn.close()
             else:
-                # SELL BLOCK EXECUTION
-                c.execute("SELECT quantity FROM portfolio WHERE username = ? AND ticker = ?", (user_id, ticker_symbol))
-                exists = c.fetchone()
-                if not exists or exists[0] < qty_input:
-                    st.error("Execution Rejected: Insufficient inventory position.")
-                else:
-                    updated_qty = exists[0] - qty_input
-                    return_funds = qty_input * live_price
-                    new_wallet_balance = st.session_state.balance + return_funds
-                    c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_wallet_balance, user_id))
-                    c.execute("UPDATE portfolio SET quantity = ? WHERE username = ? AND ticker = ?", (updated_qty, user_id, ticker_symbol))
-                    
-                    conn.commit()
-                    st.session_state.balance = new_wallet_balance
-                    st.success("Sell liquidation processed!")
-                    time.sleep(0.6)
-                    st.rerun()
-            conn.close()
+                updated_qty = exists[0] - qty_input
+                returned_funds = qty_input * live_price
+                new_cash_balance = current_cash_balance + returned_funds
+                c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_cash_balance, user_id))
+                c.execute("UPDATE portfolio SET quantity = ? WHERE username = ? AND ticker = ?", (updated_qty, user_id, ticker_symbol))
+                conn.commit()
+                conn.close()
+                st.success("Market Sell liquidations complete!")
+                time.sleep(0.4)
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Layout Action Execution Grid
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("BUY", type="primary", use_container_width=True):
-            open_order_modal("BUY")
-    with col_btn2:
-        if st.button("SELL", type="secondary", use_container_width=True):
-            open_order_modal("SELL")
-
-# --- TAB 2: ADVANCED SCROLLABLE TRADINGVIEW PORTFOLIO SUMMARY ---
+# --- TAB 2: ADVANCED REAL-TIME PORTFOLIO LEDGER ---
 with tab2:
     st.markdown("### Open Investment Matrix")
     conn = sqlite3.connect(DB_FILE)
@@ -349,26 +341,22 @@ with tab2:
             
         df_display = pd.DataFrame(portfolio_rows)
         
-        # Fixed Pandas String Formatting Codes (Removed syntax error causing '?')
         st.dataframe(
             df_display.style.format({
-                "Avg Buy Price": "₹{:,.2f}", 
-                "Current Price": "₹{:,.2f}",
+                "Avg Buy Price": "₹{:,.2f}", "Current Price": "₹{:,.2f}",
                 "Stop Loss": lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "None", 
                 "Take Profit": lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "None", 
                 "P&L (₹)": "₹{:,.2f}"
             }).map(lambda val: 'color: #00e676; font-weight: bold;' if val > 0 else 'color: #ff1744; font-weight: bold;', subset=['P&L (₹)']),
             use_container_width=True, hide_index=True
         )
-        
-        st.markdown(f"**Liquid Cash Margin:** ₹{current_cash_balance:,.2f}")
     else:
-        st.markdown(f"### Net Worth: **₹{live_net_worth:,.2f}**")
-        st.caption("No open tracking positions detected on user account.")
+        st.caption("No tracking positions active.")
+    st.markdown(f"**Liquid Wallet Cash Margin:** ₹{current_cash_balance:,.2f}")
 
-# --- TAB 3: MASTER LEADERBOARD STANDINGS ---
+# --- TAB 3: DYNAMIC LEADERBOARD METRIC STANDINGS ---
 with tab3:
-    st.markdown("### 🏆 Global Standing Matrix")
+    st.markdown("### 🏆 Leaderboard Standings Matrix")
     conn = sqlite3.connect(DB_FILE)
     all_users = pd.read_sql_query("SELECT username, balance FROM users", conn)
     all_portfolios = pd.read_sql_query("SELECT username, ticker, quantity, avg_price FROM portfolio WHERE quantity > 0", conn)
@@ -388,7 +376,7 @@ with tab3:
             inventory_worth += (t_qty * c_price)
             
         calculated_net_worth = wallet_cash + inventory_worth
-        net_returns = calculated_net_worth - 10000000.0 # Starting capital is ₹1 Crore
+        net_returns = calculated_net_worth - 10000000.0
         
         leader_matrix.append({
             "User": name_key.upper(), "Net Worth": calculated_net_worth, "Total Returns (₹)": net_returns
@@ -400,13 +388,13 @@ with tab3:
         
         st.dataframe(
             df_leaderboard.style.format({
-                "Net Worth": "₹{:,.2f}", 
-                "Total Returns (₹)": "₹{:,.2f}"
+                "Net Worth": "₹{:,.2f}", "Total Returns (₹)": "₹{:,.2f}"
             }).map(lambda val: 'color: #00e676;' if val > 0 else 'color: #ff1744;', subset=['Total Returns (₹)']),
             use_container_width=True
         )
 
-# --- CONTROLLED BACKSTAGE TICKING ---
+# --- STEADY CONTROLLED DELAY TICK REFRESH ---
 time.sleep(15)
 global_market_sync()
 st.rerun()
+#kaash kaam kare ab...
