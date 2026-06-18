@@ -228,14 +228,18 @@ with tab1:
             </div>
         """, unsafe_allow_html=True)
         
-        # Plotly Candlestick Interface Mapping
+        # Plotly Candlestick Interface Mapping (Fixed Properties)
         chart_df = live_history.copy()
         chart_df.index = pd.to_datetime(chart_df.index).strftime('%H:%M')
         
         fig = go.Figure(data=[go.Candlestick(
-            x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'],
-            increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
-            increasing_fill_color='#26a69a', decreasing_fill_color='#ef5350'
+            x=chart_df.index, 
+            open=chart_df['Open'], 
+            high=chart_df['High'], 
+            low=chart_df['Low'], 
+            close=chart_df['Close'],
+            increasing=dict(line=dict(color='#26a69a'), fillcolor='#26a69a'),
+            decreasing=dict(line=dict(color='#ef5350'), fillcolor='#ef5350')
         )])
         fig.update_layout(
             template="plotly_dark", xaxis_rangeslider_visible=False,
