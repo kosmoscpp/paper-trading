@@ -86,7 +86,7 @@ def process_auto_triggers():
             current_p = st.session_state.market_cache[ticker]["price"]
             triggered = False
             
-            # FIXED: Added structural boundary check (> 0) to prevent instant 0.0 trigger traps
+            # Boundary check (> 0) to prevent instant 0.0 trigger traps
             if sl > 0.0 and current_p <= sl:
                 triggered = True
             elif tp > 0.0 and current_p >= tp:
@@ -179,7 +179,7 @@ if not st.session_state.authenticated:
                 st.rerun()
         st.stop()
 
-# --- CALCULATE LIVE LIVE ENGINE VALUE MATRICES FOR NAV BAR ---
+# --- CALCULATE LIVE VALUE MATRICES FOR NAV BAR ---
 user_id = st.session_state.user
 conn = sqlite3.connect(DB_FILE)
 c = conn.cursor()
@@ -212,7 +212,7 @@ st.markdown(f"""
 selected_stock_label = st.selectbox("Asset Selector", list(STOCK_DICT.keys()), label_visibility="collapsed")
 ticker_symbol = STOCK_DICT[selected_stock_label]
 
-# --- THREE NAVIGATION NAVIGATION TAB GLYPHS ---
+# --- THREE NAVIGATION TAB GLYPHS ---
 tab1, tab2, tab3 = st.tabs(["🛒", "💼", "🏆"])
 
 # --- TAB 1: CHART WINDOW & ACTION FOOTERS ---
@@ -228,16 +228,12 @@ with tab1:
             </div>
         """, unsafe_allow_html=True)
         
-        # Plotly Candlestick Interface Mapping (Fixed Properties)
+        # Plotly Candlestick Interface Mapping (Fixed Properties Syntax)
         chart_df = live_history.copy()
         chart_df.index = pd.to_datetime(chart_df.index).strftime('%H:%M')
         
         fig = go.Figure(data=[go.Candlestick(
-            x=chart_df.index, 
-            open=chart_df['Open'], 
-            high=chart_df['High'], 
-            low=chart_df['Low'], 
-            close=chart_df['Close'],
+            x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'],
             increasing=dict(line=dict(color='#26a69a'), fillcolor='#26a69a'),
             decreasing=dict(line=dict(color='#ef5350'), fillcolor='#ef5350')
         )])
@@ -253,7 +249,7 @@ with tab1:
         st.error("Market asset sync offline.")
         live_price = 0.0
 
-    # --- IN-APP DIALOG POP-UP MODALS FROM STREAMLIT FRAMEWORK ---
+    # --- IN-APP DIALOG POP-UP MODALS ---
     @st.dialog("Order Parameters Window")
     def open_order_modal(order_side):
         st.markdown(f"### Market Execution: {order_side}")
@@ -353,17 +349,21 @@ with tab2:
             
         df_display = pd.DataFrame(portfolio_rows)
         
-        # Professional color formatting configuration layout for P&L streams
+        # Fixed Pandas String Formatting Codes (Removed syntax error causing '?')
         st.dataframe(
             df_display.style.format({
-                "Avg Buy Price": "₹{? :,.2f}", "Current Price": "₹{? :,.2f}",
-                "Stop Loss": "₹{? :,.2f}", "Take Profit": "₹{? :,.2f}", "P&L (₹)": "₹{? :,.2f}"
+                "Avg Buy Price": "₹{:,.2f}", 
+                "Current Price": "₹{:,.2f}",
+                "Stop Loss": lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "None", 
+                "Take Profit": lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "None", 
+                "P&L (₹)": "₹{:,.2f}"
             }).map(lambda val: 'color: #00e676; font-weight: bold;' if val > 0 else 'color: #ff1744; font-weight: bold;', subset=['P&L (₹)']),
             use_container_width=True, hide_index=True
         )
         
         st.markdown(f"**Liquid Cash Margin:** ₹{current_cash_balance:,.2f}")
     else:
+        st.markdown(f"### Net Worth: **₹{live_net_worth:,.2f}**")
         st.caption("No open tracking positions detected on user account.")
 
 # --- TAB 3: MASTER LEADERBOARD STANDINGS ---
@@ -400,13 +400,13 @@ with tab3:
         
         st.dataframe(
             df_leaderboard.style.format({
-                "Net Worth": "₹{? :,.2f}", "Total Returns (₹)": "₹{? :,.2f}"
+                "Net Worth": "₹{:,.2f}", 
+                "Total Returns (₹)": "₹{:,.2f}"
             }).map(lambda val: 'color: #00e676;' if val > 0 else 'color: #ff1744;', subset=['Total Returns (₹)']),
             use_container_width=True
         )
 
-# --- CONTROLLED DECOUPLED DELAY Refresh CYCLE LOOP ---
+# --- CONTROLLED BACKSTAGE TICKING ---
 time.sleep(15)
 global_market_sync()
 st.rerun()
-                
