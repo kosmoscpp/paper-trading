@@ -4,6 +4,7 @@ import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
 import time
+import os
 
 # --- APP CONFIG & CUSTOM CSS ---
 st.set_page_config(page_title="NSE Live Terminal", page_icon="⚡", layout="centered")
@@ -20,20 +21,40 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- DATABASE SETUP ---
-DB_FILE = "userdata.db"
+# --- CONTAINER PERSISTENT DATABASE SETUP ---
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+DB_FILE = os.path.join(DATA_DIR, "userdata.db")
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, pin TEXT, balance REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS portfolio (username TEXT, ticker TEXT, quantity INTEGER, avg_price REAL, PRIMARY KEY (username, ticker))''')
+    # Added stop_loss and take_profit columns
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio (
+                    username TEXT, 
+                    ticker TEXT, 
+                    quantity INTEGER, 
+                    avg_price REAL, 
+                    stop_loss REAL, 
+                    take_profit REAL, 
+                    PRIMARY KEY (username, ticker))''')
+    
+    # Dynamic migration check to add columns if updating an old database file
+    try:
+        c.execute("ALTER TABLE portfolio ADD COLUMN stop_loss REAL DEFAULT 0.0")
+        c.execute("ALTER TABLE portfolio ADD COLUMN take_profit REAL DEFAULT 0.0")
+    except sqlite3.OperationalError:
+        pass # Columns already exist
+        
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- THE 12-STOCK DIVERSIFIED MARKET MATRIX ---
+# --- MULTI-SECTOR MARKET MATRIX (18 STOCKS) ---
 STOCK_DICT = {
     "Reliance Industries": "RELIANCE.NS",
     "Tata Consultancy Services (TCS)": "TCS.NS",
@@ -46,29 +67,85 @@ STOCK_DICT = {
     "Maruti Suzuki": "MARUTI.NS",
     "Mahindra & Mahindra (M&M)": "M&M.NS",
     "Adani Ports": "ADANIPORTS.NS",
-    "NTPC Limited": "NTPC.NS"
+    "NTPC Limited": "NTPC.NS",
+    "Sun Pharmaceutical (Pharma)": "SUNPHARMA.NS",
+    "Cipla Limited (Pharma)": "CIPLA.NS",
+    "Oil & Natural Gas Corp (ONGC)": "ONGC.NS",
+    "Indian Oil Corporation (IOC)": "IOC.NS",
+    "Tata Power (Energy)": "TATAPOWER.NS",
+    "Power Grid Corp (Energy)": "POWERGRID.NS"
 }
 
 if "market_cache" not in st.session_state:
     st.session_state.market_cache = {}
+if "last_sync_time" not in st.session_state:
+    st.session_state.last_sync_time = 0.0
 
-# --- GLOBAL BACKGROUND SYNC ENGINE ---
-def global_market_sync():
-    for name, ticker in STOCK_DICT.items():
-        try:
-            stock_data = yf.Ticker(ticker)
-            history = stock_data.history(period="5d", interval="5m").tail(35)
-            if not history.empty:
-                st.session_state.market_cache[ticker] = {
-                    "price": history["Close"].iloc[-1],
-                    "history": history
-                }
-        except:
-            pass
+# --- AUTOMATED STOP LOSS / TAKE PROFIT ENGINE ---
+def process_auto_triggers():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Grab all active open positions
+    c.execute("SELECT username, ticker, quantity, stop_loss, take_profit FROM portfolio WHERE quantity > 0")
+    positions = c.fetchall()
+    
+    for username, ticker, qty, sl, tp in positions:
+        if ticker in st.session_state.market_cache:
+            current_p = st.session_state.market_cache[ticker]["price"]
+            triggered = False
+            reason = ""
+            
+            # Check Stop Loss (Trigger if price falls below SL, given SL is set > 0)
+            if sl > 0.0 and current_p <= sl:
+                triggered = True
+                reason = "STOP LOSS 🔴"
+            # Check Take Profit (Trigger if price rises above TP, given TP is set > 0)
+            elif tp > 0.0 and current_p >= tp:
+                triggered = True
+                reason = "TAKE PROFIT 🟢"
+                
+            if triggered:
+                # Calculate return capital and update user's account balance
+                gain_capital = qty * current_p
+                c.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (gain_capital, username))
+                # Wipe out inventory quantity for this stock asset profile
+                c.execute("UPDATE portfolio SET quantity = 0 WHERE username = ? AND ticker = ?", (username, ticker))
+                
+                # If the triggered user happens to be the current viewer, update their live local session state
+                if st.session_state.get("user") == username:
+                    st.session_state.balance += gain_capital
+                    
+    conn.commit()
+    conn.close()
+
+# --- BUNDLED & OPTIMIZED SYNC ENGINE (HIGH SPEED / LOW CPU) ---
+def global_market_sync(force=False):
+    current_time = time.time()
+    if not force and (current_time - st.session_state.last_sync_time < 30) and st.session_state.market_cache:
+        return
+
+    ticker_string = " ".join(STOCK_DICT.values())
+    try:
+        data = yf.download(ticker_string, period="5d", interval="5m", group_by='ticker', progress=False)
+        
+        for name, ticker in STOCK_DICT.items():
+            if ticker in data.columns.levels[0]:
+                ticker_df = data[ticker].dropna()
+                if not ticker_df.empty:
+                    st.session_state.market_cache[ticker] = {
+                        "price": float(ticker_df["Close"].iloc[-1]),
+                        "history": ticker_df.tail(35)
+                    }
+        st.session_state.last_sync_time = current_time
+        
+        # RUN THE TRIGGER ENGINE RIGHT AFTER REFRESHING DATA FEEDS
+        process_auto_triggers()
+    except Exception as e:
+        pass
 
 if not st.session_state.market_cache:
-    with st.spinner("Initializing global market data feeds..."):
-        global_market_sync()
+    with st.spinner("Initializing optimized global market feeds..."):
+        global_market_sync(force=True)
 
 # --- CLEAN HEADER ---
 st.markdown('<div class="main-title">NSE Live Terminal</div>', unsafe_allow_html=True)
@@ -78,7 +155,7 @@ st.markdown('<div class="main-subtitle">Real-Time Indian Stock Simulation & Exec
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user = ""
-    st.session_state.balance = 10000000.0  # Initial Balance: ₹1 Crore
+    st.session_state.balance = 10000000.0
 
 if not st.session_state.authenticated:
     st.markdown('<div class="login-box">', unsafe_allow_html=True)
@@ -115,13 +192,11 @@ if not st.session_state.authenticated:
     st.session_state.balance = current_balance
     st.rerun()
 
-# --- LIVE WORKSPACE LOADED ---
 user_input = st.session_state.user
 current_balance = st.session_state.balance
 
 st.markdown(f"👤 **Operator:** {user_input.upper()} | 💰 **Wallet Balance:** ₹{current_balance:,.2f}")
 
-# UNLOCKED THE THREE-TAB GRID
 tab1, tab2, tab3 = st.tabs(["🛒 Live Trade Room", "💼 Portfolio Summary", "🏆 Rankings Leaderboard"])
 
 # --- TAB 1: LIVE TRADE ROOM ---
@@ -140,16 +215,16 @@ with tab1:
             unsafe_allow_html=True
         )
         
-        chart_df = live_history[['Close']].copy()
+        chart_df = live_history.copy()
         chart_df.index = chart_df.index.strftime('%H:%M')
         
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=chart_df.index, y=chart_df['Close'], mode='lines',
-            line=dict(color='#00b0ff', width=2.5), name='Price'
+        fig.add_trace(go.Candlestick(
+            x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='Market Price'
         ))
         fig.update_layout(
-            margin=dict(l=20, r=20, t=10, b=10), height=250,
+            xaxis_rangeslider_visible=False,
+            margin=dict(l=20, r=20, t=10, b=10), height=270,
             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
             xaxis=dict(showgrid=False, color='#80868b'),
             yaxis=dict(showgrid=True, gridcolor='#303134', color='#80868b', autorange=True),
@@ -161,6 +236,14 @@ with tab1:
 
     st.markdown("### ⚡ Execution Window")
     trade_qty = st.number_input("Shares Quantity", min_value=1, step=1, value=5, key="order_qty")
+    
+    # ADDED USER INPUT WINDOWS FOR TARGET LIMITS DURING ORDER EXECUTION
+    col_sl, col_tp = st.columns(2)
+    with col_sl:
+        input_sl = st.number_input("Set Stop Loss Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
+    with col_tp:
+        input_tp = st.number_input("Set Take Profit Price (₹) [0 for none]", min_value=0.0, step=0.5, value=0.0)
+
     order_value = trade_qty * live_price
     st.write(f"Estimated Order Value: **₹{order_value:,.2f}**")
     
@@ -178,13 +261,17 @@ with tab1:
                 c.execute("UPDATE users SET balance = ? WHERE username = ?", (new_balance, user_input))
                 c.execute("SELECT quantity, avg_price FROM portfolio WHERE username = ? AND ticker = ?", (user_input, ticker_symbol))
                 existing_asset = c.fetchone()
+                
                 if existing_asset:
                     ex_qty, ex_avg = existing_asset
                     new_qty = ex_qty + trade_qty
                     new_avg = ((ex_qty * ex_avg) + order_value) / new_qty
-                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ? WHERE username = ? AND ticker = ?", (new_qty, new_avg, user_input, ticker_symbol))
+                    # Update targets along with average purchase price updates
+                    c.execute("UPDATE portfolio SET quantity = ?, avg_price = ?, stop_loss = ?, take_profit = ? WHERE username = ? AND ticker = ?", 
+                              (new_qty, new_avg, input_sl, input_tp, user_input, ticker_symbol))
                 else:
-                    c.execute("INSERT INTO portfolio (username, ticker, quantity, avg_price) VALUES (?, ?, ?, ?)", (user_input, ticker_symbol, trade_qty, live_price))
+                    c.execute("INSERT INTO portfolio (username, ticker, quantity, avg_price, stop_loss, take_profit) VALUES (?, ?, ?, ?, ?, ?)", 
+                              (user_input, ticker_symbol, trade_qty, live_price, input_sl, input_tp))
                 conn.commit()
                 conn.close()
                 st.session_state.balance = new_balance
@@ -219,7 +306,8 @@ with tab1:
 with tab2:
     st.markdown("### Asset Allocation Matrix")
     conn = sqlite3.connect(DB_FILE)
-    df_holdings = pd.read_sql_query("SELECT ticker, quantity, avg_price FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_input,))
+    # Added stop_loss and take_profit metrics to output view mapping
+    df_holdings = pd.read_sql_query("SELECT ticker, quantity, avg_price, stop_loss, take_profit FROM portfolio WHERE username = ? AND quantity > 0", conn, params=(user_input,))
     conn.close()
     
     total_holding_value = 0.0
@@ -230,6 +318,8 @@ with tab2:
         tick = row['ticker']
         qty = row['quantity']
         avg_p = row['avg_price']
+        sl_val = row['stop_loss']
+        tp_val = row['take_profit']
         
         asset_label = next((k for k, v in STOCK_DICT.items() if v == tick), tick)
         
@@ -245,7 +335,8 @@ with tab2:
         total_holding_value += current_v
         portfolio_rows.append({
             "Asset": asset_label, "Qty": qty, "Avg Buy Price": f"₹{avg_p:,.2f}",
-            "Current Price": f"₹{current_p:,.2f}", "Current Value": f"₹{current_v:,.2f}", "P&L": f"₹{pnl:,.2f}"
+            "Current Price": f"₹{current_p:,.2f}", "Current Value": f"₹{current_v:,.2f}", "P&L": f"₹{pnl:,.2f}",
+            "Stop Loss": f"₹{sl_val:,.2f}" if sl_val > 0 else "None", "Take Profit": f"₹{tp_val:,.2f}" if tp_val > 0 else "None"
         })
         
     col1, col2 = st.columns(2)
@@ -264,60 +355,8 @@ with tab2:
 # --- TAB 3: DYNAMIC RANKINGS LEADERBOARD ---
 with tab3:
     st.markdown("### 🏆 Elite Trader Standings")
-    st.caption("Rankings are derived instantly from Net Worth (Cash Wallet + Total Value of Open Stock Assets).")
     
-    # 1. Pull all distinct registered user accounts
     conn = sqlite3.connect(DB_FILE)
     all_users = pd.read_sql_query("SELECT username, balance FROM users", conn)
     all_portfolio = pd.read_sql_query("SELECT username, ticker, quantity FROM portfolio WHERE quantity > 0", conn)
     conn.close()
-    
-    leaderboard_data = []
-    
-    # 2. Iterate through users to mathematically combine cash and stock value
-    for idx, user_row in all_users.iterrows():
-        u_name = user_row['username']
-        cash_wallet = user_row['balance']
-        
-        # Calculate the live market value of this user's current holdings
-        user_shares = all_portfolio[all_portfolio['username'] == u_name]
-        stock_asset_worth = 0.0
-        
-        for p_idx, share_row in user_shares.iterrows():
-            t_sym = share_row['ticker']
-            t_qty = share_row['quantity']
-            
-            # Read real-time price from background cache
-            try:
-                curr_price = st.session_state.market_cache[t_sym]["price"] if t_sym in st.session_state.market_cache else 0.0
-            except:
-                curr_price = 0.0
-            stock_asset_worth += (t_qty * curr_price)
-            
-        net_worth = cash_wallet + stock_asset_worth
-        net_profit_loss = net_worth - 10000000.0  # Profit vs starting 1Cr capital
-        
-        leaderboard_data.append({
-            "User": u_name.upper(),
-            "Total Net Worth": net_worth,
-            "Total Returns": net_profit_loss
-        })
-        
-    # 3. Compile and sort dataframe securely by highest Net Worth
-    if leaderboard_data:
-        df_leaderboard = pd.DataFrame(leaderboard_data)
-        df_leaderboard = df_leaderboard.sort_values(by="Total Net Worth", ascending=False).reset_index(drop=True)
-        df_leaderboard.index += 1 # Format index column to display positions starting at Rank 1
-        
-        # Format currency strings cleanly for high readability
-        df_leaderboard["Total Net Worth"] = df_leaderboard["Total Net Worth"].apply(lambda x: f"₹{x:,.2f}")
-        df_leaderboard["Total Returns"] = df_leaderboard["Total Returns"].apply(lambda x: f"₹{x:+,.2f}")
-        
-        st.table(df_leaderboard)
-    else:
-        st.caption("No simulation records loaded in database storage arrays.")
-
-# --- BACKGROUND REFRESH & BACKGROUND SYNC (15s Loop Optimization) ---
-time.sleep(15)
-global_market_sync()
-st.rerun()
