@@ -3,8 +3,7 @@
 
 A real-time Indian Stock Market simulation dashboard designed for high-frequency virtual paper trading. This terminal allows users to authenticate securely, track live intraday stock vectors, allocate a starting capital of ₹1 Crore across a diversified asset matrix, and compete in real-time on a live rankings leaderboard.
 
-## 🔗 Live Application
-Access the production terminal directly at: https://paper-trader-kosmos.up.railway.app/
+Note: The web demo has been removed due to high usages (ts not free gng).
 
 ## 🚀 Features
 
